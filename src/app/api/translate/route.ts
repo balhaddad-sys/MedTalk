@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import getGenAI from "@/lib/gemini";
+import getOpenAI from "@/lib/openai";
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,41 +12,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const openai = getOpenAI();
 
     const sourceLangInstruction = source_lang
       ? `from ${source_lang}`
       : "(auto-detect the source language)";
 
-    const result = await model.generateContent({
-      contents: [
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      max_tokens: 1024,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a professional medical translator. Preserve medical terminology accurately. Use clear, simple language appropriate for patient-provider communication. Return ONLY the translated text, nothing else. No quotes, no explanations.",
+        },
         {
           role: "user",
-          parts: [
-            {
-              text: `You are a professional medical translator. Translate the following text ${sourceLangInstruction} to ${target_lang}.
-Preserve medical terminology accurately. Use clear, simple language appropriate for patient-provider communication.
-Return ONLY the translated text, nothing else. No quotes, no explanations.
-
-Text to translate:
-${text}`,
-            },
-          ],
+          content: `Translate the following text ${sourceLangInstruction} to ${target_lang}:\n\n${text}`,
         },
       ],
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 1024,
-      },
     });
 
     const translatedText =
-      result.response.text()?.trim() || "";
+      completion.choices[0]?.message?.content?.trim() || "";
 
     return NextResponse.json({
       translated_text: translatedText,
-      model: "gemini-2.0-flash",
+      model: "gpt-4o-mini",
     });
   } catch (error: unknown) {
     const message =

@@ -56,7 +56,8 @@ export function useAudioRecorder() {
         }
       };
 
-      recorder.start(100);
+      // Use larger timeslice to avoid fragmentation issues
+      recorder.start(250);
       setRecordingState("recording");
 
       // Duration timer
@@ -69,10 +70,11 @@ export function useAudioRecorder() {
       setRecordingState("idle");
       if (err instanceof DOMException && err.name === "NotAllowedError") {
         setError(
-          "Microphone access was denied. Please allow microphone access to use voice translation."
+          "Microphone access was denied. Please allow microphone access in your browser settings."
         );
       } else {
-        setError("Could not access microphone. Please check your device settings.");
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        setError(`Could not access microphone: ${msg}`);
       }
     }
   }, [cleanup]);
@@ -83,22 +85,41 @@ export function useAudioRecorder() {
       if (!recorder || recorder.state === "inactive") {
         cleanup();
         setRecordingState("idle");
+        setError("No active recording found. Please try again.");
         resolve(null);
         return;
+      }
+
+      // Request final data before stopping
+      try {
+        recorder.requestData();
+      } catch {
+        // Some browsers don't support requestData — that's ok
       }
 
       recorder.onstop = () => {
         const mimeType = recorder.mimeType || "audio/webm";
         const blob = new Blob(chunksRef.current, { type: mimeType });
         cleanup();
-        if (blob.size < 100) {
+
+        if (chunksRef.current.length === 0 || blob.size < 100) {
           setRecordingState("idle");
-          setError("Recording was too short. Please hold the button longer.");
+          setError(
+            `Recording too short (${blob.size} bytes, ${chunksRef.current.length} chunks). Hold the button for at least 1 second.`
+          );
           resolve(null);
         } else {
           setRecordingState("processing");
           resolve(blob);
         }
+      };
+
+      recorder.onerror = (event) => {
+        cleanup();
+        setRecordingState("idle");
+        const msg = (event as ErrorEvent).message || "Recording error";
+        setError(`Recording failed: ${msg}`);
+        resolve(null);
       };
 
       recorder.stop();

@@ -235,9 +235,15 @@ export default function Home() {
   }, [recorder]);
 
   const handleStopRecording = useCallback(async () => {
-    const blob = await recorder.stopRecording();
-    if (blob) {
-      await processAudio(blob);
+    try {
+      const blob = await recorder.stopRecording();
+      if (blob) {
+        await processAudio(blob);
+      }
+    } catch (err) {
+      recorder.setRecordingState("idle");
+      const msg = err instanceof Error ? err.message : "Recording failed";
+      setProcessingError(`Recording error: ${msg}`);
     }
   }, [recorder, processAudio]);
 

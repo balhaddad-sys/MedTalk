@@ -102,10 +102,10 @@ export function useAudioRecorder() {
         const blob = new Blob(chunksRef.current, { type: mimeType });
         cleanup();
 
-        if (chunksRef.current.length === 0 || blob.size < 100) {
+        if (chunksRef.current.length === 0 || blob.size < 50) {
           setRecordingState("idle");
           setError(
-            `Recording too short (${blob.size} bytes, ${chunksRef.current.length} chunks). Hold the button for at least 1 second.`
+            "Recording was empty. Make sure your microphone is working, then tap and speak."
           );
           resolve(null);
         } else {

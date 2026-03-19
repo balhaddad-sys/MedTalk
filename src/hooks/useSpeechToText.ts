@@ -13,7 +13,12 @@ export function useSpeechToText() {
 
       try {
         const formData = new FormData();
-        const ext = audioBlob.type.includes("mp4") ? "mp4" : "webm";
+        const mime = audioBlob.type || "audio/webm";
+        const ext = mime.includes("mp4") ? "mp4"
+          : mime.includes("ogg") ? "ogg"
+          : mime.includes("wav") ? "wav"
+          : mime.includes("mpeg") || mime.includes("mp3") ? "mp3"
+          : "webm";
         formData.append("file", audioBlob, `recording.${ext}`);
 
         // Pass language hint to improve Whisper accuracy

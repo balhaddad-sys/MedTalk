@@ -129,9 +129,10 @@ export default function Home() {
 
         await translateAndSpeak(transcript, patientLang, providerLang, "patient");
         recorder.setRecordingState("idle");
-      } catch {
+      } catch (err) {
         recorder.setRecordingState("idle");
-        setProcessingError("Something went wrong. Please try again or switch to text input.");
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        setProcessingError(`Voice processing failed: ${msg}. Try text input instead.`);
       }
     },
     [patientLang, providerLang, stt, translateAndSpeak, recorder]

@@ -46,10 +46,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // MIME type validation (permissive — some browsers report unusual types)
-    if (audioFile.type && !ALLOWED_AUDIO_TYPES.some((t) => audioFile.type.startsWith(t.split("/")[0]))) {
+    // MIME type validation (permissive — browsers report many different types)
+    if (audioFile.type && !audioFile.type.startsWith("audio/") && !audioFile.type.startsWith("video/")) {
       return NextResponse.json(
-        { error: "Invalid audio file type" },
+        { error: `Invalid audio file type: ${audioFile.type}` },
         { status: 400 }
       );
     }
@@ -65,6 +65,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ text: transcription.text });
   } catch (error: unknown) {
+    console.error("STT error:", error);
     const message =
       error instanceof Error ? error.message : "Transcription failed";
     return NextResponse.json({ error: message }, { status: 500 });

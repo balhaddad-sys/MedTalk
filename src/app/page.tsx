@@ -117,48 +117,46 @@ export default function Home() {
 
       {/* ═══ HEADER ═══ */}
       <header className="bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shrink-0 safe-top z-20">
-        <div className="max-w-lg mx-auto px-4 pt-2 pb-3">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-[12px] bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shadow-lg shadow-primary-500/20">
-                <svg className="w-[18px] h-[18px] text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+        <div className="max-w-lg mx-auto px-3 sm:px-4 pt-2 pb-2.5">
+          <div className="flex items-center justify-between mb-2.5">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-[10px] bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shadow-lg shadow-primary-500/20">
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                 </svg>
               </div>
               <div>
-                <h1 className="text-[15px] font-extrabold text-slate-900 tracking-tight leading-none">MedTalk</h1>
-                <p className="text-[10px] text-slate-400 font-medium leading-none mt-0.5">Medical Translation</p>
+                <h1 className="text-sm font-extrabold text-slate-900 tracking-tight leading-none">MedTalk</h1>
+                <p className="text-[9px] text-slate-400 font-medium leading-none mt-0.5">Medical Translation</p>
               </div>
             </div>
             {messages.length > 0 && (
-              <button onClick={() => setMessages([])} className="text-[11px] font-semibold text-slate-400 active:text-red-500 px-2.5 py-1.5 -mr-1 rounded-lg transition-colors">
-                New Session
+              <button onClick={() => setMessages([])} className="text-[11px] font-semibold text-slate-400 active:text-red-500 px-2 py-1.5 rounded-lg transition-colors">
+                Clear
               </button>
             )}
           </div>
 
-          {/* Language bar */}
-          <div className="flex items-center gap-2">
-            <button onClick={() => openLang("patient")} className="flex-1 group flex items-center gap-2.5 py-2.5 px-3.5 bg-slate-50 hover:bg-slate-100 rounded-2xl transition-all min-h-[52px] active:scale-[0.98]">
-              <span className="text-[22px] leading-none">{pL?.flag}</span>
+          {/* Language bar — stacks labels vertically for small screens */}
+          <div className="flex items-stretch gap-1.5">
+            <button onClick={() => openLang("patient")} className="flex-1 flex items-center gap-2 py-2 px-2.5 sm:px-3 bg-slate-50 active:bg-slate-100 rounded-xl transition-all min-h-[48px] active:scale-[0.98] overflow-hidden">
+              <span className="text-xl leading-none shrink-0">{pL?.flag}</span>
               <div className="flex-1 text-left min-w-0">
-                <p className="text-[13px] font-bold text-slate-800 truncate leading-tight">{pL?.nativeLabel}</p>
-                <p className="text-[10px] text-primary-500 font-semibold leading-tight mt-px">PATIENT</p>
+                <p className="text-xs font-bold text-slate-800 truncate leading-tight">{pL?.nativeLabel}</p>
+                <p className="text-[9px] text-primary-500 font-bold leading-tight mt-px uppercase tracking-wider">Patient</p>
               </div>
-              <svg className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-400 transition-colors shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
             </button>
 
-            <button onClick={swap} className="w-9 h-9 rounded-xl bg-primary-50 hover:bg-primary-100 flex items-center justify-center shrink-0 active:scale-90 transition-all" aria-label="Swap">
-              <svg className="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
+            <button onClick={swap} className="w-8 rounded-lg bg-primary-50 active:bg-primary-100 flex items-center justify-center shrink-0 active:scale-90 transition-all self-center aspect-square" aria-label="Swap">
+              <svg className="w-3.5 h-3.5 text-primary-500" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
             </button>
 
-            <button onClick={() => openLang("provider")} className="flex-1 group flex items-center gap-2.5 py-2.5 px-3.5 bg-slate-50 hover:bg-slate-100 rounded-2xl transition-all min-h-[52px] active:scale-[0.98]">
-              <span className="text-[22px] leading-none">{dL?.flag}</span>
+            <button onClick={() => openLang("provider")} className="flex-1 flex items-center gap-2 py-2 px-2.5 sm:px-3 bg-slate-50 active:bg-slate-100 rounded-xl transition-all min-h-[48px] active:scale-[0.98] overflow-hidden">
+              <span className="text-xl leading-none shrink-0">{dL?.flag}</span>
               <div className="flex-1 text-left min-w-0">
-                <p className="text-[13px] font-bold text-slate-800 truncate leading-tight">{dL?.nativeLabel}</p>
-                <p className="text-[10px] text-emerald-500 font-semibold leading-tight mt-px">PROVIDER</p>
+                <p className="text-xs font-bold text-slate-800 truncate leading-tight">{dL?.nativeLabel}</p>
+                <p className="text-[9px] text-emerald-500 font-bold leading-tight mt-px uppercase tracking-wider">Provider</p>
               </div>
-              <svg className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-400 transition-colors shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
             </button>
           </div>
         </div>
@@ -229,7 +227,7 @@ export default function Home() {
 
       {/* ═══ MESSAGES ═══ */}
       <div className="flex-1 overflow-y-auto thin-scroll">
-        <div className="max-w-lg mx-auto px-4 py-4">
+        <div className="max-w-lg mx-auto px-3 sm:px-4 py-3 sm:py-4">
 
           {/* Empty state */}
           {messages.length === 0 && !busy && (
@@ -249,13 +247,13 @@ export default function Home() {
                 Speak, type, or pick a phrase to start translating between {pL?.label} and {dL?.label}
               </p>
 
-              <div className="w-full space-y-2">
+              <div className="w-full grid grid-cols-1 gap-2">
                 {PHRASES.slice(0, 4).map(p => (
                   <button key={p.text} onClick={() => phrase(p.text)} disabled={busy}
-                    className="w-full flex items-center gap-3 px-4 py-3.5 bg-white hover:bg-primary-50 border border-slate-200/80 hover:border-primary-200 rounded-2xl text-left transition-all disabled:opacity-40 active:scale-[0.98] shadow-sm shadow-slate-100">
-                    <span className="text-[20px]">{p.emoji}</span>
-                    <span className="text-[14px] font-semibold text-slate-700">{p.text}</span>
-                    <svg className="w-4 h-4 text-slate-300 ml-auto shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                    className="w-full flex items-center gap-2.5 px-3.5 py-3 bg-white active:bg-primary-50 border border-slate-200/80 active:border-primary-200 rounded-2xl text-left transition-all disabled:opacity-40 active:scale-[0.98] shadow-sm shadow-slate-100">
+                    <span className="text-lg shrink-0">{p.emoji}</span>
+                    <span className="text-[13px] font-semibold text-slate-700 flex-1">{p.text}</span>
+                    <svg className="w-3.5 h-3.5 text-slate-300 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
                   </button>
                 ))}
               </div>
@@ -346,36 +344,36 @@ export default function Home() {
 
       {/* ═══ INPUT BAR ═══ */}
       <div className="bg-white/80 backdrop-blur-xl border-t border-slate-200/60 shrink-0 safe-bottom">
-        <div className="max-w-lg mx-auto px-3 py-2 flex items-end gap-2">
+        <div className="max-w-lg mx-auto px-2 sm:px-3 py-2 flex items-end gap-1.5 sm:gap-2">
           <button onClick={() => setSheet("phrases")} disabled={busy || recording}
-            className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center shrink-0 active:scale-90 disabled:opacity-30 transition-all"
+            className="w-10 h-10 rounded-xl bg-slate-100 active:bg-slate-200 flex items-center justify-center shrink-0 active:scale-90 disabled:opacity-30 transition-all"
             aria-label="Quick phrases">
             <svg className="w-[18px] h-[18px] text-slate-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" /></svg>
           </button>
 
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <input type="text" value={text} onChange={e => setText(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !busy) sendText(); }}
-              placeholder={`Type in ${pL?.nativeLabel || "your language"}...`}
+              placeholder={`Type in ${pL?.label || "your language"}...`}
               disabled={busy || recording}
               dir={pL?.dir === "rtl" ? "rtl" : "ltr"}
-              className="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-50 focus:bg-white rounded-2xl outline-none focus:ring-2 focus:ring-primary-200 disabled:opacity-40 placeholder:text-slate-400 transition-all min-h-[42px] text-[15px]" />
+              className="w-full px-3 sm:px-4 py-2.5 bg-slate-100 focus:bg-white rounded-2xl outline-none focus:ring-2 focus:ring-primary-200 disabled:opacity-40 placeholder:text-slate-400 transition-all min-h-[42px] text-[15px]" />
           </div>
 
           {text.trim() ? (
             <button onClick={sendText} disabled={busy}
-              className="w-10 h-10 rounded-xl bg-primary-600 hover:bg-primary-700 flex items-center justify-center shrink-0 disabled:opacity-40 active:scale-90 transition-all shadow-md shadow-primary-500/20"
+              className="w-10 h-10 rounded-xl bg-primary-600 active:bg-primary-700 flex items-center justify-center shrink-0 disabled:opacity-40 active:scale-90 transition-all shadow-md shadow-primary-500/20"
               aria-label="Send">
               <svg className="w-[18px] h-[18px] text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg>
             </button>
           ) : (
             <button onClick={mic} disabled={busy}
-              className={`w-[52px] h-[52px] rounded-2xl flex items-center justify-center shrink-0 transition-all
+              className={`w-12 h-12 sm:w-[52px] sm:h-[52px] rounded-2xl flex items-center justify-center shrink-0 transition-all
                 ${recording
                   ? "bg-red-500 recording-glow scale-105"
                   : busy
                     ? "bg-slate-200"
-                    : "bg-gradient-to-br from-primary-500 to-primary-700 shadow-lg shadow-primary-500/30 hover:shadow-primary-500/40 active:scale-90"
+                    : "bg-gradient-to-br from-primary-500 to-primary-700 shadow-lg shadow-primary-500/30 active:scale-90"
                 }`}
               aria-label={recording ? "Stop recording" : "Start recording"}>
               {busy ? (
@@ -383,7 +381,7 @@ export default function Home() {
               ) : recording ? (
                 <div className="w-5 h-5 rounded-[4px] bg-white" />
               ) : (
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" /></svg>
+                <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" /></svg>
               )}
             </button>
           )}

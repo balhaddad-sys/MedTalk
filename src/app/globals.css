@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@theme {
+  --color-medical-50: #eff6ff;
+  --color-medical-100: #dbeafe;
+  --color-medical-200: #bfdbfe;
+  --color-medical-300: #93c5fd;
+  --color-medical-400: #60a5fa;
+  --color-medical-500: #3b82f6;
+  --color-medical-600: #2563eb;
+  --color-medical-700: #1d4ed8;
+  --color-medical-800: #1e40af;
+  --color-medical-900: #1e3a8a;
+
+  --color-success: #16a34a;
+  --color-danger: #dc2626;
+  --color-warning: #f59e0b;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    sans-serif;
+  background-color: var(--color-medical-50);
+  color: #1e293b;
+}
+
+/* Pulse animation for recording */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+@keyframes gentle-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.2s ease-out infinite;
+}
+
+.animate-gentle-pulse {
+  animation: gentle-pulse 2s ease-in-out infinite;
+}
+
+/* Sound wave animation */
+@keyframes sound-wave {
+  0%,
+  100% {
+    height: 8px;
+  }
+  50% {
+    height: 24px;
+  }
+}
+
+.animate-sound-wave {
+  animation: sound-wave 0.6s ease-in-out infinite;
+}
+
+/* Smooth transitions */
+.step-transition {
+  transition: all 0.3s ease-in-out;
+}

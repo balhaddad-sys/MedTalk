@@ -8,6 +8,7 @@ import LanguageSelector from "@/components/LanguageSelector";
 import HoldToTalk from "@/components/HoldToTalk";
 import ConversationView from "@/components/ConversationView";
 import QuickPhrases from "@/components/QuickPhrases";
+import QuestionTree from "@/components/QuestionTree";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useSpeechToText } from "@/hooks/useSpeechToText";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -31,6 +32,7 @@ export default function Home() {
   const [activeRole, setActiveRole] = useState<"patient" | "provider">("patient");
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
+  const [showQuestionTree, setShowQuestionTree] = useState(false);
 
   const processAudioRef = useRef<((blob: Blob) => void) | undefined>(undefined);
   const recorder = useAudioRecorder((blob) => processAudioRef.current?.(blob));
@@ -64,7 +66,8 @@ export default function Home() {
 
         if (!transcript.trim()) {
           recorder.setRecordingState("idle");
-          setProcessingError("Could not understand the audio. Please try again.");
+          setProcessingError("Could not understand the audio. Try the question tree below.");
+          setShowQuestionTree(true);
           return;
         }
 
@@ -99,8 +102,9 @@ export default function Home() {
       } catch {
         recorder.setRecordingState("idle");
         setProcessingError(
-          "Something went wrong. Please try again."
+          "Something went wrong. Try the question tree below."
         );
+        setShowQuestionTree(true);
       }
     },
     [patientLang, providerLang, activeRole, stt, translation, tts, recorder]
@@ -146,6 +150,15 @@ export default function Home() {
       }
     },
     [patientLang, providerLang, translation, tts, recorder]
+  );
+
+  // Handle question tree phrase selection
+  const handleTreePhrase = useCallback(
+    async (phrase: string) => {
+      setShowQuestionTree(false);
+      await handleQuickPhrase(phrase);
+    },
+    [handleQuickPhrase]
   );
 
   // Play a message's audio
@@ -378,6 +391,25 @@ export default function Home() {
                 error={processingError || recorder.error}
               />
             </div>
+
+            {/* Can't use voice? button */}
+            {!showQuestionTree && (
+              <button
+                onClick={() => setShowQuestionTree(true)}
+                className="text-sm text-medical-600 hover:text-medical-700 font-medium transition-colors"
+              >
+                Can&apos;t use voice? Tap to answer questions instead
+              </button>
+            )}
+
+            {/* Question Tree (fallback for voice failure) */}
+            {showQuestionTree && (
+              <QuestionTree
+                onSelectPhrase={handleTreePhrase}
+                isTranslating={isProcessing}
+                onClose={() => setShowQuestionTree(false)}
+              />
+            )}
 
             {/* Quick Phrases */}
             <QuickPhrases

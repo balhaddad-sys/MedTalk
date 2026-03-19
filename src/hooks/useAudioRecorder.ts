@@ -7,6 +7,7 @@ export function useAudioRecorder() {
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [debugInfo, setDebugInfo] = useState<string>("");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -23,26 +24,32 @@ export function useAudioRecorder() {
       streamRef.current = null;
     }
     mediaRecorderRef.current = null;
-    chunksRef.current = [];
   }, []);
 
   const startRecording = useCallback(async () => {
     try {
       setError(null);
+      setDebugInfo("Requesting microphone...");
       chunksRef.current = [];
       setDuration(0);
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+      setDebugInfo("Microphone granted. Setting up recorder...");
 
       // Determine supported MIME type
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm")
-          ? "audio/webm"
-          : MediaRecorder.isTypeSupported("audio/mp4")
-            ? "audio/mp4"
-            : "";
+      let mimeType = "";
+      for (const type of [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+        "audio/ogg;codecs=opus",
+      ]) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          mimeType = type;
+          break;
+        }
+      }
 
       const recorder = mimeType
         ? new MediaRecorder(stream, { mimeType })
@@ -56,11 +63,20 @@ export function useAudioRecorder() {
         }
       };
 
-      // Use larger timeslice to avoid fragmentation issues
-      recorder.start(250);
-      setRecordingState("recording");
+      recorder.onerror = (event) => {
+        const msg = (event as ErrorEvent).message || "Unknown recorder error";
+        setError(`Recorder error: ${msg}`);
+        setDebugInfo(`Error: ${msg}`);
+        cleanup();
+        setRecordingState("idle");
+      };
 
-      // Duration timer
+      recorder.start(500);
+      setRecordingState("recording");
+      setDebugInfo(
+        `Recording started. Format: ${recorder.mimeType || "default"}. Speak now!`
+      );
+
       const startTime = Date.now();
       timerRef.current = setInterval(() => {
         setDuration(Math.floor((Date.now() - startTime) / 1000));
@@ -69,12 +85,15 @@ export function useAudioRecorder() {
       cleanup();
       setRecordingState("idle");
       if (err instanceof DOMException && err.name === "NotAllowedError") {
-        setError(
-          "Microphone access was denied. Please allow microphone access in your browser settings."
-        );
+        setError("Microphone blocked. Please allow microphone access in browser settings.");
+        setDebugInfo("Permission denied");
+      } else if (err instanceof DOMException && err.name === "NotFoundError") {
+        setError("No microphone found. Please connect a microphone.");
+        setDebugInfo("No microphone device");
       } else {
-        const msg = err instanceof Error ? err.message : "Unknown error";
-        setError(`Could not access microphone: ${msg}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(`Microphone error: ${msg}`);
+        setDebugInfo(`Error: ${msg}`);
       }
     }
   }, [cleanup]);
@@ -85,27 +104,29 @@ export function useAudioRecorder() {
       if (!recorder || recorder.state === "inactive") {
         cleanup();
         setRecordingState("idle");
-        setError("No active recording found. Please try again.");
+        setDebugInfo("No active recorder found");
         resolve(null);
         return;
       }
 
-      // Request final data before stopping
-      try {
-        recorder.requestData();
-      } catch {
-        // Some browsers don't support requestData — that's ok
-      }
+      setDebugInfo(
+        `Stopping... State: ${recorder.state}, Chunks so far: ${chunksRef.current.length}`
+      );
 
       recorder.onstop = () => {
         const mimeType = recorder.mimeType || "audio/webm";
         const blob = new Blob(chunksRef.current, { type: mimeType });
+        const chunkCount = chunksRef.current.length;
         cleanup();
 
-        if (chunksRef.current.length === 0 || blob.size < 50) {
+        setDebugInfo(
+          `Stopped. Chunks: ${chunkCount}, Size: ${blob.size} bytes, Type: ${mimeType}`
+        );
+
+        if (blob.size < 50) {
           setRecordingState("idle");
           setError(
-            "Recording was empty. Make sure your microphone is working, then tap and speak."
+            "Recording was empty. Make sure your microphone is working."
           );
           resolve(null);
         } else {
@@ -114,22 +135,21 @@ export function useAudioRecorder() {
         }
       };
 
-      recorder.onerror = (event) => {
-        cleanup();
-        setRecordingState("idle");
-        const msg = (event as ErrorEvent).message || "Recording error";
-        setError(`Recording failed: ${msg}`);
-        resolve(null);
-      };
-
+      try {
+        recorder.requestData();
+      } catch {
+        // some browsers don't support this
+      }
       recorder.stop();
     });
   }, [cleanup]);
 
   const cancelRecording = useCallback(() => {
+    chunksRef.current = [];
     cleanup();
     setRecordingState("idle");
     setDuration(0);
+    setDebugInfo("Cancelled");
   }, [cleanup]);
 
   return {
@@ -137,6 +157,7 @@ export function useAudioRecorder() {
     setRecordingState,
     duration,
     error,
+    debugInfo,
     startRecording,
     stopRecording,
     cancelRecording,

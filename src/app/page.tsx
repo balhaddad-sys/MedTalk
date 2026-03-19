@@ -543,6 +543,7 @@ export default function Home() {
                         onStop={handleStopRecording}
                         onCancel={handleCancelRecording}
                         error={processingError || recorder.error}
+                        debugInfo={recorder.debugInfo}
                       />
                     </div>
                   ) : (
@@ -595,6 +596,7 @@ export default function Home() {
                       onStop={handleStopRecording}
                       onCancel={handleCancelRecording}
                       error={processingError || recorder.error}
+                        debugInfo={recorder.debugInfo}
                     />
                   </div>
                 ) : (

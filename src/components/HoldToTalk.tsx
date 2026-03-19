@@ -10,6 +10,7 @@ interface HoldToTalkProps {
   onStop: () => void;
   onCancel?: () => void;
   error?: string | null;
+  debugInfo?: string;
 }
 
 export default function HoldToTalk({
@@ -19,6 +20,7 @@ export default function HoldToTalk({
   onStop,
   onCancel,
   error,
+  debugInfo,
 }: HoldToTalkProps) {
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -190,6 +192,13 @@ export default function HoldToTalk({
       {error && (
         <div className="max-w-sm text-center px-4 py-2 bg-danger/10 text-danger rounded-xl text-sm" role="alert">
           {error}
+        </div>
+      )}
+
+      {/* Debug info */}
+      {debugInfo && (
+        <div className="max-w-sm text-center px-3 py-1.5 bg-slate-100 text-slate-500 rounded-lg text-xs font-mono">
+          {debugInfo}
         </div>
       )}
     </div>

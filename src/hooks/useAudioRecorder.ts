@@ -33,7 +33,15 @@ export function useAudioRecorder() {
       chunksRef.current = [];
       setDuration(0);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,           // mono — better for speech
+          sampleRate: 16000,         // 16kHz is Whisper's native rate
+          echoCancellation: true,
+          noiseSuppression: true,    // reduce background noise
+          autoGainControl: true,     // normalize volume levels
+        },
+      });
       streamRef.current = stream;
       setDebugInfo("Microphone granted. Setting up recorder...");
 

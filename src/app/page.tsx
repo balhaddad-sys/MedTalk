@@ -1,14 +1,16 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { AppStep, Message } from "@/types";
+import { AppStep, InteractionMode, Message } from "@/types";
 import { getLanguageByCode } from "@/lib/languages";
 import Header from "@/components/Header";
 import LanguageSelector from "@/components/LanguageSelector";
+import AccessibilityModeSelector from "@/components/AccessibilityModeSelector";
 import HoldToTalk from "@/components/HoldToTalk";
 import ConversationView from "@/components/ConversationView";
 import QuickPhrases from "@/components/QuickPhrases";
 import QuestionTree from "@/components/QuestionTree";
+import QuestionsMode from "@/components/QuestionsMode";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useSpeechToText } from "@/hooks/useSpeechToText";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -33,6 +35,9 @@ export default function Home() {
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [showQuestionTree, setShowQuestionTree] = useState(false);
+  const [interactionMode, setInteractionMode] = useState<InteractionMode | null>(
+    () => loadSession<InteractionMode | null>("medtalk_mode", null)
+  );
 
   const processAudioRef = useRef<((blob: Blob) => void) | undefined>(undefined);
   const recorder = useAudioRecorder((blob) => processAudioRef.current?.(blob));
@@ -50,6 +55,7 @@ export default function Home() {
   useEffect(() => { sessionStorage.setItem("medtalk_patientLang", JSON.stringify(patientLang)); }, [patientLang]);
   useEffect(() => { sessionStorage.setItem("medtalk_providerLang", JSON.stringify(providerLang)); }, [providerLang]);
   useEffect(() => { sessionStorage.setItem("medtalk_messages", JSON.stringify(messages)); }, [messages]);
+  useEffect(() => { sessionStorage.setItem("medtalk_mode", JSON.stringify(interactionMode)); }, [interactionMode]);
 
   // Process recorded audio: STT → Translate → TTS → add message
   const processAudio = useCallback(
@@ -266,20 +272,15 @@ export default function Home() {
               />
             </div>
 
-            {/* Continue button */}
-            <button
-              onClick={() => setStep(2)}
-              disabled={!canContinue}
-              className={`w-full py-4 rounded-2xl text-lg font-semibold transition-all
-                ${
-                  canContinue
-                    ? "bg-medical-600 hover:bg-medical-700 text-white shadow-lg shadow-medical-300/40 active:scale-[0.98]"
-                    : "bg-slate-200 text-slate-400 cursor-not-allowed"
-                }
-              `}
-            >
-              Start Translating
-            </button>
+            {/* Mode selector — shown once languages are picked */}
+            {canContinue && (
+              <AccessibilityModeSelector
+                onSelect={(mode) => {
+                  setInteractionMode(mode);
+                  setStep(2);
+                }}
+              />
+            )}
 
             {/* Privacy notice */}
             <p className="text-xs text-center text-slate-400 leading-relaxed">
@@ -289,8 +290,23 @@ export default function Home() {
           </div>
         )}
 
-        {/* STEP 2: Conversation */}
-        {step === 2 && (
+        {/* STEP 2 — QUESTIONS MODE (accessible, no voice) */}
+        {step === 2 && interactionMode === "questions" && patientLang && providerLang && (
+          <QuestionsMode
+            patientLang={patientLang}
+            providerLang={providerLang}
+            onTranslate={async (text, src, tgt) => {
+              return await translation.translate(text, src, tgt);
+            }}
+            onBack={() => {
+              setInteractionMode(null);
+              setStep(1);
+            }}
+          />
+        )}
+
+        {/* STEP 2: Voice Conversation */}
+        {step === 2 && interactionMode === "voice" && (
           <div className="w-full space-y-6">
             {/* Language bar */}
             <div className="flex items-center justify-between bg-white rounded-2xl border border-slate-200 px-4 py-3">

@@ -15,20 +15,45 @@ export default function MessageBubble({
   isPlaying,
 }: MessageBubbleProps) {
   const targetLang = getLanguageByCode(message.targetLang);
+  const sourceLang = getLanguageByCode(message.sourceLang);
   const isRtl = targetLang?.dir === "rtl";
+  const isProvider = message.role === "provider";
 
   return (
     <div className="flex flex-col gap-1.5 w-full">
+      {/* Role indicator */}
+      <span
+        className={`text-xs font-medium px-1 ${
+          isProvider
+            ? "text-emerald-600 self-end"
+            : "text-medical-600 self-start"
+        }`}
+      >
+        {isProvider ? "Provider" : "Patient"} {sourceLang?.flag}
+      </span>
+
       {/* Original text */}
-      <div className="self-start max-w-[85%]">
-        <div className="px-4 py-2.5 bg-white border border-slate-200 rounded-2xl rounded-tl-sm">
+      <div className={`max-w-[85%] ${isProvider ? "self-end" : "self-start"}`}>
+        <div
+          className={`px-4 py-2.5 rounded-2xl ${
+            isProvider
+              ? "bg-emerald-50 border border-emerald-200 rounded-tr-sm"
+              : "bg-white border border-slate-200 rounded-tl-sm"
+          }`}
+        >
           <p className="text-sm text-slate-600">{message.originalText}</p>
         </div>
       </div>
 
       {/* Translated text */}
-      <div className="self-end max-w-[85%]">
-        <div className="px-4 py-2.5 bg-medical-600 rounded-2xl rounded-tr-sm">
+      <div className={`max-w-[85%] ${isProvider ? "self-start" : "self-end"}`}>
+        <div
+          className={`px-4 py-2.5 rounded-2xl ${
+            isProvider
+              ? "bg-emerald-600 rounded-tl-sm"
+              : "bg-medical-600 rounded-tr-sm"
+          }`}
+        >
           <p
             className="text-sm text-white"
             dir={isRtl ? "rtl" : "ltr"}
@@ -36,7 +61,11 @@ export default function MessageBubble({
             {message.translatedText}
           </p>
           <div className="flex items-center justify-end gap-2 mt-1.5">
-            <span className="text-xs text-medical-200">
+            <span
+              className={`text-xs ${
+                isProvider ? "text-emerald-200" : "text-medical-200"
+              }`}
+            >
               {targetLang?.flag} {targetLang?.label}
             </span>
             <button

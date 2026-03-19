@@ -14,7 +14,6 @@ export interface Message {
   sourceLang: string;
   targetLang: string;
   timestamp: number;
-  audioUrl?: string;
 }
 
 export interface TranslateRequest {

@@ -58,14 +58,12 @@ export default function HoldToTalk({
         <button
           onPointerDown={(e) => {
             e.preventDefault();
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
             if (isIdle) onStart();
           }}
           onPointerUp={(e) => {
             e.preventDefault();
-            if (isRecording) onStop();
-          }}
-          onPointerLeave={(e) => {
-            e.preventDefault();
+            (e.target as HTMLElement).releasePointerCapture(e.pointerId);
             if (isRecording) onStop();
           }}
           onContextMenu={(e) => e.preventDefault()}

@@ -12,8 +12,11 @@ export function useSpeechToText() {
 
     try {
       const formData = new FormData();
-      // Determine extension from mime type
-      const ext = audioBlob.type.includes("mp4") ? "mp4" : "webm";
+      const mime = audioBlob.type;
+      const ext = mime.includes("mp4") ? "mp4"
+        : mime.includes("ogg") ? "ogg"
+        : mime.includes("webm") ? "webm"
+        : "webm";
       formData.append("file", audioBlob, `recording.${ext}`);
 
       const response = await fetch("/api/stt", {

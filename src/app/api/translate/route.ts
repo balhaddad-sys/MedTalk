@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import getGenAI from "@/lib/openai";
+import getGenAI from "@/lib/gemini";
 
 export async function POST(request: NextRequest) {
   try {

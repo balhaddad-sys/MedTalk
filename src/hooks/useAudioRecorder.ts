@@ -3,7 +3,9 @@
 import { useState, useRef, useCallback } from "react";
 import { RecordingState } from "@/types";
 
-export function useAudioRecorder() {
+const MAX_RECORDING_SECONDS = 60;
+
+export function useAudioRecorder(onAutoStop?: (blob: Blob) => void) {
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -12,11 +14,18 @@ export function useAudioRecorder() {
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const maxDurationRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onAutoStopRef = useRef(onAutoStop);
+  onAutoStopRef.current = onAutoStop;
 
   const cleanup = useCallback(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
+    }
+    if (maxDurationRef.current) {
+      clearTimeout(maxDurationRef.current);
+      maxDurationRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
@@ -64,6 +73,25 @@ export function useAudioRecorder() {
       timerRef.current = setInterval(() => {
         setDuration(Math.floor((Date.now() - startTime) / 1000));
       }, 200);
+
+      // Auto-stop after max duration
+      maxDurationRef.current = setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+          const rec = mediaRecorderRef.current;
+          rec.onstop = () => {
+            const mt = rec.mimeType || "audio/webm";
+            const blob = new Blob(chunksRef.current, { type: mt });
+            cleanup();
+            if (blob.size >= 100) {
+              setRecordingState("processing");
+              onAutoStopRef.current?.(blob);
+            } else {
+              setRecordingState("idle");
+            }
+          };
+          rec.stop();
+        }
+      }, MAX_RECORDING_SECONDS * 1000);
     } catch (err) {
       cleanup();
       setRecordingState("idle");

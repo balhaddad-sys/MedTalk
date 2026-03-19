@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { AppStep, Message } from "@/types";
 import { getLanguageByCode } from "@/lib/languages";
 import Header from "@/components/Header";
@@ -13,15 +13,27 @@ import { useSpeechToText } from "@/hooks/useSpeechToText";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useTextToSpeech } from "@/hooks/useTextToSpeech";
 
+function loadSession<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const stored = sessionStorage.getItem(key);
+    return stored ? JSON.parse(stored) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function Home() {
-  const [step, setStep] = useState<AppStep>(1);
-  const [patientLang, setPatientLang] = useState<string | null>(null);
-  const [providerLang, setProviderLang] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [step, setStep] = useState<AppStep>(() => loadSession("medtalk_step", 1));
+  const [patientLang, setPatientLang] = useState<string | null>(() => loadSession("medtalk_patientLang", null));
+  const [providerLang, setProviderLang] = useState<string | null>(() => loadSession("medtalk_providerLang", null));
+  const [messages, setMessages] = useState<Message[]>(() => loadSession("medtalk_messages", []));
+  const [activeRole, setActiveRole] = useState<"patient" | "provider">("patient");
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
 
-  const recorder = useAudioRecorder();
+  const processAudioRef = useRef<((blob: Blob) => void) | undefined>(undefined);
+  const recorder = useAudioRecorder((blob) => processAudioRef.current?.(blob));
   const stt = useSpeechToText();
   const translation = useTranslation();
   const tts = useTextToSpeech();
@@ -31,10 +43,19 @@ export default function Home() {
     stt.isLoading ||
     translation.isLoading;
 
+  // Persist session state
+  useEffect(() => { sessionStorage.setItem("medtalk_step", JSON.stringify(step)); }, [step]);
+  useEffect(() => { sessionStorage.setItem("medtalk_patientLang", JSON.stringify(patientLang)); }, [patientLang]);
+  useEffect(() => { sessionStorage.setItem("medtalk_providerLang", JSON.stringify(providerLang)); }, [providerLang]);
+  useEffect(() => { sessionStorage.setItem("medtalk_messages", JSON.stringify(messages)); }, [messages]);
+
   // Process recorded audio: STT → Translate → TTS → add message
   const processAudio = useCallback(
     async (audioBlob: Blob) => {
       if (!patientLang || !providerLang) return;
+
+      const sourceLang = activeRole === "patient" ? patientLang : providerLang;
+      const targetLang = activeRole === "patient" ? providerLang : patientLang;
 
       setProcessingError(null);
       try {
@@ -50,25 +71,25 @@ export default function Home() {
         // Step 2: Translate
         const result = await translation.translate(
           transcript,
-          patientLang,
-          providerLang
+          sourceLang,
+          targetLang
         );
 
         // Step 3: Create message
         const messageId = Date.now().toString();
         const newMessage: Message = {
           id: messageId,
-          role: "patient",
+          role: activeRole,
           originalText: transcript,
           translatedText: result.translated_text,
-          sourceLang: patientLang,
-          targetLang: providerLang,
+          sourceLang,
+          targetLang,
           timestamp: Date.now(),
         };
 
         // Step 4: TTS (browser-based, free)
         try {
-          await tts.speak(result.translated_text, providerLang);
+          await tts.speak(result.translated_text, targetLang);
         } catch {
           // TTS failure is non-critical, still show the translation
         }
@@ -82,8 +103,9 @@ export default function Home() {
         );
       }
     },
-    [patientLang, providerLang, stt, translation, tts, recorder]
+    [patientLang, providerLang, activeRole, stt, translation, tts, recorder]
   );
+  processAudioRef.current = processAudio;
 
   // Handle quick phrase selection
   const handleQuickPhrase = useCallback(
@@ -176,7 +198,7 @@ export default function Home() {
       <main className="flex-1 flex flex-col items-center px-4 py-6 max-w-2xl mx-auto w-full">
         {/* STEP 1: Language Selection */}
         {step === 1 && (
-          <div className="w-full space-y-8 step-transition">
+          <div className="w-full space-y-8">
             {/* Welcome */}
             <div className="text-center space-y-2">
               <h2 className="text-2xl font-bold text-slate-800">
@@ -201,7 +223,7 @@ export default function Home() {
                 <div className="h-px flex-1 bg-slate-200" />
                 <button
                   onClick={handleSwapLanguages}
-                  disabled={!patientLang && !providerLang}
+                  disabled={!patientLang || !providerLang}
                   className="p-2 rounded-full bg-white border border-slate-200 hover:border-medical-300 transition-colors disabled:opacity-30"
                   aria-label="Swap languages"
                 >
@@ -256,7 +278,7 @@ export default function Home() {
 
         {/* STEP 2: Conversation */}
         {step === 2 && (
-          <div className="w-full space-y-6 step-transition">
+          <div className="w-full space-y-6">
             {/* Language bar */}
             <div className="flex items-center justify-between bg-white rounded-2xl border border-slate-200 px-4 py-3">
               <button
@@ -319,6 +341,30 @@ export default function Home() {
                     d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
                   />
                 </svg>
+              </button>
+            </div>
+
+            {/* Role Toggle */}
+            <div className="flex items-center bg-white rounded-2xl border border-slate-200 p-1">
+              <button
+                onClick={() => setActiveRole("patient")}
+                className={`flex-1 py-2.5 px-4 rounded-xl text-sm font-medium transition-all ${
+                  activeRole === "patient"
+                    ? "bg-medical-600 text-white shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {patientLangData?.flag} Patient Speaking
+              </button>
+              <button
+                onClick={() => setActiveRole("provider")}
+                className={`flex-1 py-2.5 px-4 rounded-xl text-sm font-medium transition-all ${
+                  activeRole === "provider"
+                    ? "bg-emerald-600 text-white shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {providerLangData?.flag} Provider Speaking
               </button>
             </div>
 

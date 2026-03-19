@@ -7,7 +7,7 @@ export function useTextToSpeech() {
   const [error, setError] = useState<string | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
-  const speak = useCallback(async (text: string, langCode?: string): Promise<string> => {
+  const speak = useCallback(async (text: string, langCode?: string): Promise<void> => {
     setError(null);
 
     // Stop any currently playing speech
@@ -17,7 +17,6 @@ export function useTextToSpeech() {
       const utterance = new SpeechSynthesisUtterance(text);
       utteranceRef.current = utterance;
 
-      // Set language if provided
       if (langCode) {
         utterance.lang = langCode;
       }
@@ -34,9 +33,6 @@ export function useTextToSpeech() {
       };
 
       window.speechSynthesis.speak(utterance);
-
-      // Return a unique ID for this speech instance
-      return `speech-${Date.now()}`;
     } catch (err) {
       setIsPlaying(false);
       const message =
@@ -46,17 +42,10 @@ export function useTextToSpeech() {
     }
   }, []);
 
-  const playUrl = useCallback(async (_url: string, text?: string, langCode?: string) => {
-    // With browser TTS, we just re-speak the text
-    if (text) {
-      await speak(text, langCode);
-    }
-  }, [speak]);
-
   const stop = useCallback(() => {
     window.speechSynthesis.cancel();
     setIsPlaying(false);
   }, []);
 
-  return { speak, playUrl, stop, isPlaying, error };
+  return { speak, stop, isPlaying, error };
 }

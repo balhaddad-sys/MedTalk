@@ -3,17 +3,23 @@ import { getOpenAI } from "@/lib/openai";
 import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB (Whisper limit)
-const ALLOWED_AUDIO_TYPES = [
-  "audio/webm", "audio/mp4", "audio/mpeg", "audio/wav",
-  "audio/ogg", "audio/flac", "audio/m4a", "audio/x-m4a",
-  "video/webm", // some browsers report webm audio as video/webm
-];
 
 const MEDICAL_VOCABULARY_PROMPT =
   "Patient symptoms: pain, nausea, vomiting, headache, fever, cough, shortness of breath, " +
   "chest pain, dizziness, fatigue, medication, dosage, milligrams, allergies, blood pressure, " +
   "diabetes, insulin, penicillin, ibuprofen, acetaminophen, aspirin, hypertension, " +
   "tachycardia, bradycardia, oxygen saturation, temperature, pulse, respiratory rate";
+
+// Map browser MIME types to Whisper-compatible extensions
+function getWhisperFilename(mimeType: string): string {
+  if (mimeType.includes("mp4") || mimeType.includes("m4a")) return "audio.mp4";
+  if (mimeType.includes("wav")) return "audio.wav";
+  if (mimeType.includes("mpeg") || mimeType.includes("mp3")) return "audio.mp3";
+  if (mimeType.includes("ogg")) return "audio.ogg";
+  if (mimeType.includes("flac")) return "audio.flac";
+  // webm (most common from browsers) - Whisper accepts it
+  return "audio.webm";
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -46,21 +52,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // MIME type validation (permissive — browsers report many different types)
-    if (audioFile.type && !audioFile.type.startsWith("audio/") && !audioFile.type.startsWith("video/")) {
-      return NextResponse.json(
-        { error: `Invalid audio file type: ${audioFile.type}` },
-        { status: 400 }
-      );
-    }
-
     const openai = getOpenAI();
+
+    // Convert to a proper File with Whisper-compatible filename
+    const filename = getWhisperFilename(audioFile.type || "");
+    const buffer = Buffer.from(await audioFile.arrayBuffer());
+    const whisperFile = new File([buffer], filename, {
+      type: audioFile.type || "audio/webm",
+    });
 
     const transcription = await openai.audio.transcriptions.create({
       model: "whisper-1",
-      file: audioFile,
+      file: whisperFile,
       prompt: MEDICAL_VOCABULARY_PROMPT,
-      ...(languageHint && languageHint.length === 2 ? { language: languageHint } : {}),
+      ...(languageHint && languageHint.length === 2
+        ? { language: languageHint }
+        : {}),
     });
 
     return NextResponse.json({ text: transcription.text });

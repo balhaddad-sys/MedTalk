@@ -1,25 +1,31 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { AppStep, Message } from "@/types";
+import { AppMode, Message } from "@/types";
 import { getLanguageByCode } from "@/lib/languages";
+import { intakeQuestions } from "@/lib/intake";
 import Header from "@/components/Header";
 import LanguageSelector from "@/components/LanguageSelector";
 import HoldToTalk from "@/components/HoldToTalk";
 import ConversationView from "@/components/ConversationView";
 import QuickPhrases from "@/components/QuickPhrases";
+import IntakeFlow from "@/components/IntakeFlow";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useSpeechToText } from "@/hooks/useSpeechToText";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useTextToSpeech } from "@/hooks/useTextToSpeech";
 
 export default function Home() {
-  const [step, setStep] = useState<AppStep>(1);
+  const [mode, setMode] = useState<AppMode>("setup");
   const [patientLang, setPatientLang] = useState<string | null>(null);
   const [providerLang, setProviderLang] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
+  const [intakeIndex, setIntakeIndex] = useState(0);
+  const [activeTab, setActiveTab] = useState<"conversation" | "intake">(
+    "intake"
+  );
 
   const recorder = useAudioRecorder();
   const stt = useSpeechToText();
@@ -29,101 +35,97 @@ export default function Home() {
   const isProcessing =
     recorder.recordingState === "processing" ||
     stt.isLoading ||
-    translation.isLoading;
+    translation.isLoading ||
+    tts.isLoading;
 
-  // Process recorded audio: STT → Translate → TTS → add message
-  const processAudio = useCallback(
-    async (audioBlob: Blob) => {
-      if (!patientLang || !providerLang) return;
-
+  // Core: translate text and add to conversation
+  const translateAndSpeak = useCallback(
+    async (text: string, fromLang: string, toLang: string, role: "patient" | "provider") => {
       setProcessingError(null);
       try {
-        // Step 1: Speech to text
-        const transcript = await stt.transcribe(audioBlob);
-
-        if (!transcript.trim()) {
-          recorder.setRecordingState("idle");
-          setProcessingError("Could not understand the audio. Please try again.");
-          return;
-        }
-
-        // Step 2: Translate
-        const result = await translation.translate(
-          transcript,
-          patientLang,
-          providerLang
-        );
-
-        // Step 3: Create message
+        const result = await translation.translate(text, fromLang, toLang);
         const messageId = Date.now().toString();
         const newMessage: Message = {
           id: messageId,
-          role: "patient",
-          originalText: transcript,
-          translatedText: result.translated_text,
-          sourceLang: patientLang,
-          targetLang: providerLang,
-          timestamp: Date.now(),
-        };
-
-        // Step 4: TTS (browser-based, free)
-        try {
-          await tts.speak(result.translated_text, providerLang);
-        } catch {
-          // TTS failure is non-critical, still show the translation
-        }
-
-        setMessages((prev) => [...prev, newMessage]);
-        recorder.setRecordingState("idle");
-      } catch {
-        recorder.setRecordingState("idle");
-        setProcessingError(
-          "Something went wrong. Please try again."
-        );
-      }
-    },
-    [patientLang, providerLang, stt, translation, tts, recorder]
-  );
-
-  // Handle quick phrase selection
-  const handleQuickPhrase = useCallback(
-    async (text: string) => {
-      if (!patientLang || !providerLang) return;
-      setProcessingError(null);
-      recorder.setRecordingState("processing");
-
-      try {
-        const result = await translation.translate(
-          text,
-          "en", // Quick phrases are in English
-          providerLang
-        );
-
-        const messageId = Date.now().toString();
-        const newMessage: Message = {
-          id: messageId,
-          role: "patient",
+          role,
           originalText: text,
           translatedText: result.translated_text,
-          sourceLang: "en",
-          targetLang: providerLang,
+          sourceLang: fromLang,
+          targetLang: toLang,
           timestamp: Date.now(),
         };
 
+        // Generate TTS audio
         try {
-          await tts.speak(result.translated_text, providerLang);
+          const audioUrl = await tts.speak(result.translated_text);
+          newMessage.audioUrl = audioUrl;
         } catch {
           // TTS failure is non-critical
         }
 
         setMessages((prev) => [...prev, newMessage]);
+        return result.translated_text;
       } catch {
-        setProcessingError("Could not translate phrase. Please try again.");
-      } finally {
-        recorder.setRecordingState("idle");
+        setProcessingError("Translation failed. Please try again.");
+        return null;
       }
     },
-    [patientLang, providerLang, translation, tts, recorder]
+    [translation, tts]
+  );
+
+  // Process recorded audio: STT → Translate → TTS
+  const processAudio = useCallback(
+    async (audioBlob: Blob) => {
+      if (!patientLang || !providerLang) return;
+      setProcessingError(null);
+
+      try {
+        const transcript = await stt.transcribe(audioBlob);
+        if (!transcript.trim()) {
+          recorder.setRecordingState("idle");
+          setProcessingError(
+            "Could not understand the audio. Please try speaking again."
+          );
+          return;
+        }
+
+        await translateAndSpeak(transcript, patientLang, providerLang, "patient");
+        recorder.setRecordingState("idle");
+      } catch {
+        recorder.setRecordingState("idle");
+        setProcessingError("Something went wrong. Please try again.");
+      }
+    },
+    [patientLang, providerLang, stt, translateAndSpeak, recorder]
+  );
+
+  // Handle guided intake question — translate question to patient's language
+  const handleIntakeQuestion = useCallback(
+    async (question: string) => {
+      if (!patientLang || !providerLang) return;
+      recorder.setRecordingState("processing");
+
+      await translateAndSpeak(question, "en", patientLang, "provider");
+
+      // Advance to next question
+      if (intakeIndex < intakeQuestions.length) {
+        setIntakeIndex((prev) => prev + 1);
+      }
+      recorder.setRecordingState("idle");
+    },
+    [patientLang, providerLang, translateAndSpeak, intakeIndex, recorder]
+  );
+
+  // Handle quick phrase
+  const handleQuickPhrase = useCallback(
+    async (text: string) => {
+      if (!patientLang || !providerLang) return;
+      recorder.setRecordingState("processing");
+
+      await translateAndSpeak(text, "en", providerLang, "patient");
+      recorder.setRecordingState("idle");
+    },
+    [patientLang, providerLang, translateAndSpeak, recorder]
   );
 
   // Play a message's audio
@@ -137,9 +139,18 @@ export default function Home() {
 
       setPlayingMessageId(message.id);
       try {
-        await tts.speak(message.translatedText, message.targetLang);
+        if (message.audioUrl) {
+          await tts.playUrl(message.audioUrl);
+        } else {
+          const audioUrl = await tts.speak(message.translatedText);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === message.id ? { ...m, audioUrl } : m
+            )
+          );
+        }
       } catch {
-        // Silent fail for replay
+        // Silent fail
       }
       setPlayingMessageId(null);
     },
@@ -159,39 +170,61 @@ export default function Home() {
     }
   }, [recorder, processAudio]);
 
-  // Switch languages
+  // Swap languages
   const handleSwapLanguages = useCallback(() => {
     setPatientLang(providerLang);
     setProviderLang(patientLang);
   }, [patientLang, providerLang]);
 
+  // Start session
+  const handleStartSession = useCallback(() => {
+    setMode("conversation");
+  }, []);
+
   const patientLangData = patientLang ? getLanguageByCode(patientLang) : null;
   const providerLangData = providerLang ? getLanguageByCode(providerLang) : null;
-  const canContinue = patientLang && providerLang;
+  const canStart = patientLang && providerLang;
 
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
 
       <main className="flex-1 flex flex-col items-center px-4 py-6 max-w-2xl mx-auto w-full">
-        {/* STEP 1: Language Selection */}
-        {step === 1 && (
-          <div className="w-full space-y-8 step-transition">
-            {/* Welcome */}
+        {/* ======================== SETUP ======================== */}
+        {mode === "setup" && (
+          <div className="w-full space-y-6 step-transition">
             <div className="text-center space-y-2">
               <h2 className="text-2xl font-bold text-slate-800">
                 Welcome to MedTalk
               </h2>
-              <p className="text-slate-500">
-                Select languages to start translating
+              <p className="text-slate-500 text-sm">
+                Real-time medical translation for patients &amp; providers
               </p>
             </div>
 
-            {/* Language selectors */}
-            <div className="space-y-6">
+            {/* How it works */}
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { n: "1", icon: "\u{1F30D}", text: "Choose languages" },
+                { n: "2", icon: "\u{1F399}\uFE0F", text: "Speak or type" },
+                { n: "3", icon: "\u{1F50A}", text: "Hear translation" },
+              ].map((s) => (
+                <div
+                  key={s.n}
+                  className="bg-white rounded-xl p-3 text-center border border-slate-100"
+                >
+                  <span className="text-2xl block">{s.icon}</span>
+                  <p className="text-xs font-medium text-slate-600 mt-1">
+                    {s.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-5">
               <LanguageSelector
-                label="I speak..."
-                subtitle="Select your language"
+                label="Patient speaks..."
+                subtitle="Select the patient's language"
                 selectedCode={patientLang}
                 onSelect={setPatientLang}
                 excludeCode={providerLang}
@@ -223,7 +256,7 @@ export default function Home() {
               </div>
 
               <LanguageSelector
-                label="Doctor speaks..."
+                label="Provider speaks..."
                 subtitle="Select the provider's language"
                 selectedCode={providerLang}
                 onSelect={setProviderLang}
@@ -231,37 +264,35 @@ export default function Home() {
               />
             </div>
 
-            {/* Continue button */}
             <button
-              onClick={() => setStep(2)}
-              disabled={!canContinue}
+              onClick={handleStartSession}
+              disabled={!canStart}
               className={`w-full py-4 rounded-2xl text-lg font-semibold transition-all
                 ${
-                  canContinue
+                  canStart
                     ? "bg-medical-600 hover:bg-medical-700 text-white shadow-lg shadow-medical-300/40 active:scale-[0.98]"
                     : "bg-slate-200 text-slate-400 cursor-not-allowed"
                 }
               `}
             >
-              Start Translating
+              Start Session
             </button>
 
-            {/* Privacy notice */}
             <p className="text-xs text-center text-slate-400 leading-relaxed">
-              Your conversations are not stored. Audio is processed in real-time
-              and immediately discarded for your privacy.
+              Conversations are not stored. Audio is processed in real-time and
+              immediately discarded for your privacy.
             </p>
           </div>
         )}
 
-        {/* STEP 2: Conversation */}
-        {step === 2 && (
-          <div className="w-full space-y-6 step-transition">
-            {/* Language bar */}
-            <div className="flex items-center justify-between bg-white rounded-2xl border border-slate-200 px-4 py-3">
+        {/* ======================== CONVERSATION / INTAKE ======================== */}
+        {mode === "conversation" && (
+          <div className="w-full space-y-4 step-transition">
+            {/* Top bar: languages + back */}
+            <div className="flex items-center justify-between bg-white rounded-2xl border border-slate-200 px-4 py-2.5 shadow-sm">
               <button
-                onClick={() => setStep(1)}
-                className="flex items-center gap-2 text-sm text-slate-500 hover:text-medical-600 transition-colors"
+                onClick={() => setMode("setup")}
+                className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-medical-600 transition-colors"
               >
                 <svg
                   className="w-4 h-4"
@@ -276,11 +307,11 @@ export default function Home() {
                     d="M15 19l-7-7 7-7"
                   />
                 </svg>
-                Change
+                Back
               </button>
 
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <span>
                   {patientLangData?.flag} {patientLangData?.label}
                 </span>
                 <svg
@@ -293,10 +324,10 @@ export default function Home() {
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     strokeWidth={2}
-                    d="M13 7l5 5m0 0l-5 5m5-5H6"
+                    d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
                   />
                 </svg>
-                <span className="text-sm font-medium">
+                <span>
                   {providerLangData?.flag} {providerLangData?.label}
                 </span>
               </div>
@@ -307,7 +338,7 @@ export default function Home() {
                 aria-label="Swap languages"
               >
                 <svg
-                  className="w-4 h-4 text-slate-500"
+                  className="w-4 h-4 text-slate-400"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -322,44 +353,117 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Hold to Talk */}
-            <div className="py-4">
-              <HoldToTalk
-                recordingState={isProcessing ? "processing" : recorder.recordingState}
-                duration={recorder.duration}
-                onStart={handleStartRecording}
-                onStop={handleStopRecording}
-                error={processingError || recorder.error}
-              />
+            {/* Mode tabs */}
+            <div className="flex gap-2 bg-white rounded-xl p-1.5 border border-slate-200 shadow-sm">
+              <button
+                onClick={() => setActiveTab("intake")}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2
+                  ${
+                    activeTab === "intake"
+                      ? "bg-medical-600 text-white shadow-md mode-active"
+                      : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                  }
+                `}
+              >
+                <span>{"\u{1F4CB}"}</span>
+                Guided Intake
+              </button>
+              <button
+                onClick={() => setActiveTab("conversation")}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2
+                  ${
+                    activeTab === "conversation"
+                      ? "bg-medical-600 text-white shadow-md mode-active"
+                      : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                  }
+                `}
+              >
+                <span>{"\u{1F4AC}"}</span>
+                Free Conversation
+              </button>
             </div>
 
-            {/* Quick Phrases */}
-            <QuickPhrases
-              onSelectPhrase={handleQuickPhrase}
-              isTranslating={isProcessing}
-            />
+            {/* Guided Intake Tab */}
+            {activeTab === "intake" && (
+              <div className="space-y-4 fade-in-up">
+                <IntakeFlow
+                  onAskQuestion={handleIntakeQuestion}
+                  isProcessing={isProcessing}
+                  currentQuestionIndex={intakeIndex}
+                />
 
-            {/* Conversation History */}
+                <div className="relative">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="h-px flex-1 bg-slate-200" />
+                    <span className="text-xs text-slate-400">
+                      Patient responds by voice
+                    </span>
+                    <div className="h-px flex-1 bg-slate-200" />
+                  </div>
+
+                  {/* Hold to talk for patient response */}
+                  <div className="py-2">
+                    <HoldToTalk
+                      recordingState={
+                        isProcessing ? "processing" : recorder.recordingState
+                      }
+                      duration={recorder.duration}
+                      onStart={handleStartRecording}
+                      onStop={handleStopRecording}
+                      error={processingError || recorder.error}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Free Conversation Tab */}
+            {activeTab === "conversation" && (
+              <div className="space-y-4 fade-in-up">
+                {/* Voice input */}
+                <div className="py-2">
+                  <HoldToTalk
+                    recordingState={
+                      isProcessing ? "processing" : recorder.recordingState
+                    }
+                    duration={recorder.duration}
+                    onStart={handleStartRecording}
+                    onStop={handleStopRecording}
+                    error={processingError || recorder.error}
+                  />
+                </div>
+
+                {/* Quick phrases */}
+                <QuickPhrases
+                  onSelectPhrase={handleQuickPhrase}
+                  isTranslating={isProcessing}
+                />
+              </div>
+            )}
+
+            {/* Conversation History (always visible) */}
             <ConversationView
               messages={messages}
               onPlayMessage={handlePlayMessage}
               playingMessageId={playingMessageId}
             />
 
-            {/* Clear conversation */}
+            {/* Clear */}
             {messages.length > 0 && (
               <button
-                onClick={() => setMessages([])}
-                className="w-full py-2.5 text-sm text-slate-400 hover:text-danger transition-colors"
+                onClick={() => {
+                  setMessages([]);
+                  setIntakeIndex(0);
+                }}
+                className="w-full py-2 text-sm text-slate-400 hover:text-danger transition-colors"
               >
-                Clear conversation
+                Clear conversation &amp; restart
               </button>
             )}
           </div>
         )}
       </main>
 
-      {/* Footer disclaimer */}
       <footer className="px-4 py-3 text-center">
         <p className="text-xs text-slate-400">
           MedTalk is a communication aid, not a medical device. Always verify

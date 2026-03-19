@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import getGenAI from "@/lib/openai";
+import { getOpenAI } from "@/lib/openai";
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,42 +13,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
-    // Convert audio file to base64
-    const arrayBuffer = await audioFile.arrayBuffer();
-    const base64Audio = Buffer.from(arrayBuffer).toString("base64");
-
-    // Determine mime type
-    const mimeType = audioFile.type || "audio/webm";
-
-    const result = await model.generateContent({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              inlineData: {
-                mimeType,
-                data: base64Audio,
-              },
-            },
-            {
-              text: "Transcribe this audio accurately. Return ONLY the spoken text, nothing else. No quotes, no labels, no explanations.",
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 1024,
-      },
+    const openai = getOpenAI();
+    const transcription = await openai.audio.transcriptions.create({
+      model: "whisper-1",
+      file: audioFile,
     });
 
-    const transcript = result.response.text()?.trim() || "";
-
-    return NextResponse.json({ text: transcript });
+    return NextResponse.json({ text: transcription.text });
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "Transcription failed";

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import getGenAI from "@/lib/openai";
+import { getGenAI } from "@/lib/openai";
 
 export async function POST(request: NextRequest) {
   try {
@@ -35,14 +35,10 @@ ${text}`,
           ],
         },
       ],
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 1024,
-      },
+      generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
     });
 
-    const translatedText =
-      result.response.text()?.trim() || "";
+    const translatedText = result.response.text()?.trim() || "";
 
     return NextResponse.json({
       translated_text: translatedText,

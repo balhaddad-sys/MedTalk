@@ -28,6 +28,14 @@ export interface TranslateResponse {
   model: string;
 }
 
-export type AppStep = 1 | 2;
-
 export type RecordingState = "idle" | "recording" | "processing";
+
+export type AppMode = "setup" | "conversation" | "intake";
+
+export interface IntakeQuestion {
+  id: string;
+  emoji: string;
+  question: string;
+  category: "chief" | "pain" | "history" | "allergy" | "medication";
+  followUp?: string[];
+}

@@ -4,59 +4,87 @@ import { useState, useRef, useCallback } from "react";
 
 export function useTextToSpeech() {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-
-  const speak = useCallback(async (text: string, langCode?: string): Promise<string> => {
-    setError(null);
-
-    // Stop any currently playing speech
-    window.speechSynthesis.cancel();
-
-    try {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utteranceRef.current = utterance;
-
-      // Set language if provided
-      if (langCode) {
-        utterance.lang = langCode;
-      }
-
-      utterance.rate = 0.9; // Slightly slower for medical clarity
-      utterance.pitch = 1;
-
-      setIsPlaying(true);
-
-      utterance.onend = () => setIsPlaying(false);
-      utterance.onerror = () => {
-        setIsPlaying(false);
-        setError("Could not play audio");
-      };
-
-      window.speechSynthesis.speak(utterance);
-
-      // Return a unique ID for this speech instance
-      return `speech-${Date.now()}`;
-    } catch (err) {
-      setIsPlaying(false);
-      const message =
-        err instanceof Error ? err.message : "Could not generate speech";
-      setError(message);
-      throw err;
-    }
-  }, []);
-
-  const playUrl = useCallback(async (_url: string, text?: string, langCode?: string) => {
-    // With browser TTS, we just re-speak the text
-    if (text) {
-      await speak(text, langCode);
-    }
-  }, [speak]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const stop = useCallback(() => {
-    window.speechSynthesis.cancel();
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
     setIsPlaying(false);
   }, []);
 
-  return { speak, playUrl, stop, isPlaying, error };
+  const speak = useCallback(
+    async (text: string): Promise<string> => {
+      setError(null);
+      stop();
+      setIsLoading(true);
+
+      try {
+        const response = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Text-to-speech failed");
+        }
+
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+
+        const audio = new Audio(audioUrl);
+        audioRef.current = audio;
+
+        setIsLoading(false);
+        setIsPlaying(true);
+
+        audio.onended = () => {
+          setIsPlaying(false);
+          audioRef.current = null;
+        };
+        audio.onerror = () => {
+          setIsPlaying(false);
+          setError("Could not play audio");
+          audioRef.current = null;
+        };
+
+        await audio.play();
+        return audioUrl;
+      } catch (err) {
+        setIsLoading(false);
+        setIsPlaying(false);
+        const message =
+          err instanceof Error ? err.message : "Could not generate speech";
+        setError(message);
+        throw err;
+      }
+    },
+    [stop]
+  );
+
+  const playUrl = useCallback(
+    async (url: string) => {
+      stop();
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      setIsPlaying(true);
+      audio.onended = () => {
+        setIsPlaying(false);
+        audioRef.current = null;
+      };
+      audio.onerror = () => {
+        setIsPlaying(false);
+        audioRef.current = null;
+      };
+      await audio.play();
+    },
+    [stop]
+  );
+
+  return { speak, playUrl, stop, isPlaying, isLoading, error };
 }

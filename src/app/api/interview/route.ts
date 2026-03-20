@@ -68,102 +68,19 @@ const HISTORY_COVERAGE_ORDER = [
   { label: "Social history", aliases: ["social history", "smoking", "alcohol", "drugs"] },
 ] as const;
 
-const INTERVIEW_PROMPT = `You are a conservative emergency medicine clinical interview assistant inside a translation app.
+const INTERVIEW_PROMPT = `You are an ER clinical interview AI. Return JSON only. Use ONLY stated facts — never invent negatives, exam findings, or results.
 
-Analyze the conversation transcript and return JSON only. Use ONLY facts from the transcript. Do not invent negatives, exam findings, vitals, or test results.
+Goals: Screen life-threats first. Track asked vs not asked. Ask ONE clear next question (6th-grade reading level). Assess when critical red flags screened and basic HPI done.
 
-Goals:
-1. Keep the clinician oriented to the most dangerous plausible diagnoses first.
-2. Track what has and has not been asked.
-3. Ask one concrete next question in plain language when more information is needed.
-4. Produce an assessment only when the history is mature enough for a provisional triage-oriented summary.
-5. Respect the supplied symptom protocol guidance when a protocol is active.
+PACING: 4-6 patient answers. After 5, wrap up unless question changes management. Skip low-yield social/surgical history.
 
-Rules:
-- All narrative fields you generate should be in English.
-- Supporting and against evidence must be short phrases taken from or tightly grounded in the transcript.
-- If a red flag was not asked, put it in unscreened. Never mark it absent unless it was clearly denied.
-- next_question must be one sentence at about a 6th-grade reading level.
-- ready_for_assessment is true only when the immediate dangerous diagnoses for the leading differential have been reasonably screened and the basic HPI is mostly complete.
-- Set assessment to null unless ready_for_assessment is true.
-- If the patient may be unstable, say so in rationale/critical actions.
+REPETITION (CRITICAL): If topic asked 2+ times = EXHAUSTED, mark "partial", move on. May rephrase ONCE with simpler words/yes-no. Never repeat semantically identical question.
 
-Repetition avoidance (CRITICAL — read carefully):
-- Before generating next_question, review ALL prior CLINICIAN turns in the transcript.
-- NEVER ask the same question or a question on the same topic if the CLINICIAN has already asked about it TWO or more times. Count the CLINICIAN lines that address the same clinical topic (onset, location, medications, etc.). If there are already 2+ attempts, that topic is EXHAUSTED — mark it "partial" and move to a completely different topic.
-- If the patient gave a vague or off-topic answer to the MOST RECENT clinician question, you may rephrase ONCE using simpler words, a yes/no reframe, or a concrete example. But if the clinician already rephrased once before (i.e., this would be the third ask on the same topic), STOP and move on.
-- Examples of acceptable single rephrase:
-  "When did the pain start?" -> Patient: "It hurts a lot" -> Rephrase: "Was it today that it started, or before today?"
-  "Do you take any medicines?" -> Patient: "The doctor gave me some" -> Rephrase: "Do you remember the names? For example, anything for blood pressure or sugar?"
-- When moving on from an exhausted topic, mark it "partial" in coverage and pick the NEXT highest-priority gap that has NOT been asked about yet.
-- NEVER generate a next_question that is semantically identical to any prior CLINICIAN turn. If you catch yourself about to repeat, pick a different topic entirely.
+ANSWER OPTIONS: 3-6 tappable options per question. Short label (max 5 words) + emoji. Clinically discriminating. Last option = "Not sure".
 
-Answer options (for non-verbal / questionnaire mode):
-- For EVERY next_question, also generate 3-6 tappable answer_options that cover the most clinically useful responses.
-- Each option has a short "label" (max 5 words, plain language) and an "emoji" icon.
-- Options MUST be mutually exclusive and clinically discriminating — not just "Yes"/"No". Include specific descriptors.
-- Always include a "Something else" or "I'm not sure" option as the last choice.
-- Examples:
-  Q: "When did the pain start?" -> Options: [{"label":"Today","emoji":"📅"},{"label":"Yesterday","emoji":"⬅️"},{"label":"A few days ago","emoji":"📆"},{"label":"More than a week","emoji":"🗓️"},{"label":"I'm not sure","emoji":"❓"}]
-  Q: "What does the pain feel like?" -> Options: [{"label":"Sharp, stabbing","emoji":"🔪"},{"label":"Dull, aching","emoji":"😣"},{"label":"Burning","emoji":"🔥"},{"label":"Pressure, squeezing","emoji":"✊"},{"label":"Comes and goes","emoji":"🔄"},{"label":"Something else","emoji":"❓"}]
-  Q: "How bad is the pain, from 1 to 10?" -> Options: [{"label":"Mild (1-3)","emoji":"🟢"},{"label":"Moderate (4-6)","emoji":"🟡"},{"label":"Severe (7-8)","emoji":"🟠"},{"label":"Worst ever (9-10)","emoji":"🔴"}]
-- For yes/no red flag questions, still provide nuance: [{"label":"Yes","emoji":"✅"},{"label":"No","emoji":"❌"},{"label":"I'm not sure","emoji":"❓"}]
+JSON: {"chief_complaint":"","one_line_summary":"","differential":[{"diagnosis":"","likelihood":"high|moderate|low|excluded","urgency":"critical|urgent|routine","supporting_evidence":[],"against_evidence":[],"missing_information":[]}],"red_flags":{"present":[{"label":"","evidence":""}],"absent":[{"label":"","evidence":""}],"unscreened":[]},"hpi_coverage":[{"label":"Onset|Location|Duration|Character|Aggravating|Relieving|Temporal|Severity","status":"done|partial|missing","note":""}],"history_coverage":[{"label":"Medications|Allergies|Medical history|Surgical history|LMP|Social history","status":"done|partial|missing|not_applicable","note":""}],"highest_priority_gap":{"label":"","rationale":""},"next_question":"","answer_options":[{"label":"","emoji":""}],"ready_for_assessment":false,"readiness_rationale":"","assessment":null}
+When ready_for_assessment=true: assessment={"esi_level":"1-5","rationale":"","recommended_workup":[],"critical_actions":[],"disposition":""}`;
 
-Return this exact JSON shape:
-{
-  "chief_complaint": "string",
-  "one_line_summary": "string",
-  "differential": [
-    {
-      "diagnosis": "string",
-      "likelihood": "high|moderate|low|excluded",
-      "urgency": "critical|urgent|routine",
-      "supporting_evidence": ["string"],
-      "against_evidence": ["string"],
-      "missing_information": ["string"]
-    }
-  ],
-  "red_flags": {
-    "present": [{ "label": "string", "evidence": "string" }],
-    "absent": [{ "label": "string", "evidence": "string" }],
-    "unscreened": ["string"]
-  },
-  "hpi_coverage": [
-    { "label": "Onset", "status": "done|partial|missing", "note": "string" },
-    { "label": "Location", "status": "done|partial|missing", "note": "string" },
-    { "label": "Duration", "status": "done|partial|missing", "note": "string" },
-    { "label": "Character", "status": "done|partial|missing", "note": "string" },
-    { "label": "Aggravating", "status": "done|partial|missing", "note": "string" },
-    { "label": "Relieving", "status": "done|partial|missing", "note": "string" },
-    { "label": "Temporal", "status": "done|partial|missing", "note": "string" },
-    { "label": "Severity", "status": "done|partial|missing", "note": "string" }
-  ],
-  "history_coverage": [
-    { "label": "Medications", "status": "done|partial|missing", "note": "string" },
-    { "label": "Allergies", "status": "done|partial|missing", "note": "string" },
-    { "label": "Medical history", "status": "done|partial|missing", "note": "string" },
-    { "label": "Surgical history", "status": "done|partial|missing", "note": "string" },
-    { "label": "LMP", "status": "done|missing|not_applicable", "note": "string" },
-    { "label": "Social history", "status": "done|partial|missing", "note": "string" }
-  ],
-  "highest_priority_gap": {
-    "label": "string",
-    "rationale": "string"
-  },
-  "next_question": "string",
-  "answer_options": [
-    { "label": "string", "emoji": "string" }
-  ],
-  "ready_for_assessment": true,
-  "readiness_rationale": "string",
-  "assessment": {
-    "esi_level": "1|2|3|4|5|undetermined",
-    "rationale": "string",
-    "recommended_workup": ["string"],
-    "critical_actions": ["string"],
-    "disposition": "string"
-  }
-}`;
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -333,6 +250,59 @@ function normalizeAssessment(value: unknown): AssessmentData | null {
   };
 }
 
+// ─── Server-side topic repetition detection ───
+// Categorize clinician questions into clinical topics so we can tell the model
+// which topics are exhausted (asked 2+ times) and must not be asked again.
+const TOPIC_PATTERNS: { topic: string; patterns: string[] }[] = [
+  { topic: "onset/timing", patterns: ["when did", "how long", "when was", "start", "began", "begin", "first notice"] },
+  { topic: "location", patterns: ["where does", "where is", "which part", "point to", "location", "where exactly"] },
+  { topic: "character/quality", patterns: ["what does it feel", "describe the", "type of pain", "sharp", "dull", "burning", "pressure", "what kind"] },
+  { topic: "severity", patterns: ["how bad", "how severe", "scale of", "1 to 10", "pain score", "intensity", "how much does"] },
+  { topic: "aggravating factors", patterns: ["make it worse", "aggravat", "worsen", "trigger", "what makes"] },
+  { topic: "relieving factors", patterns: ["make it better", "reliev", "help with", "ease", "anything that helps"] },
+  { topic: "radiation", patterns: ["spread", "radiat", "move to", "go to your", "travel", "into your arm", "into your back", "into your jaw"] },
+  { topic: "medications", patterns: ["medic", "taking any", "prescri", "drug", "pill", "tablet", "medicine"] },
+  { topic: "allergies", patterns: ["allerg", "react to", "sensitive to"] },
+  { topic: "medical history", patterns: ["medical history", "past medical", "health condition", "diagnosed with", "chronic", "pmh"] },
+  { topic: "surgical history", patterns: ["surg", "operation", "procedure"] },
+  { topic: "pregnancy/LMP", patterns: ["pregnan", "last period", "menstrual", "lmp", "could you be pregnant"] },
+  { topic: "social history", patterns: ["smok", "alcohol", "drink", "drug use", "recreational"] },
+  { topic: "breathing", patterns: ["breath", "breathing", "short of breath", "respiratory"] },
+  { topic: "chest pain", patterns: ["chest pain", "chest pressure", "chest tight"] },
+  { topic: "fever", patterns: ["fever", "temperature", "chills"] },
+  { topic: "nausea/vomiting", patterns: ["nausea", "vomit", "throw up", "sick to your stomach"] },
+  { topic: "syncope", patterns: ["pass out", "faint", "black out", "lose consciousness", "dizz"] },
+  { topic: "neurologic", patterns: ["weakness", "numb", "tingl", "vision", "speech", "trouble speaking", "trouble seeing"] },
+  { topic: "bleeding", patterns: ["bleed", "blood in", "bloody", "black stool"] },
+];
+
+function classifyTopics(text: string): string[] {
+  const lower = text.toLowerCase();
+  return TOPIC_PATTERNS
+    .filter(({ patterns }) => patterns.some(p => lower.includes(p)))
+    .map(({ topic }) => topic);
+}
+
+function buildExhaustedTopicsBlock(messages: ConversationMessage[]): string {
+  const topicCounts = new Map<string, number>();
+
+  for (const msg of messages) {
+    if (msg.role !== "provider") continue;
+    const topics = classifyTopics(msg.text);
+    for (const topic of topics) {
+      topicCounts.set(topic, (topicCounts.get(topic) || 0) + 1);
+    }
+  }
+
+  const exhausted = [...topicCounts.entries()]
+    .filter(([, count]) => count >= 2)
+    .map(([topic]) => topic);
+
+  if (exhausted.length === 0) return "";
+
+  return `EXHAUSTED TOPICS (asked 2+ times — DO NOT ask about these again, mark them "partial" in coverage and move on):\n${exhausted.map(t => `- ${t}`).join("\n")}`;
+}
+
 function normalizeReasoning(value: ModelReasoningOutput): ClinicalReasoningData {
   const nextQuestion = asString(value.next_question) || "What worries you the most right now?";
 
@@ -382,7 +352,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         question: "What brings you to the emergency department today?",
         isAssessment: false,
-        reasoning: null,
+        reasoning: {
+          chiefComplaint: "",
+          oneLineSummary: "Awaiting patient's chief complaint.",
+          differential: [],
+          redFlags: { present: [], absent: [], unscreened: [] },
+          hpiCoverage: [],
+          historyCoverage: [],
+          highestPriorityGap: { label: "Chief complaint", rationale: "Need to identify the presenting complaint." },
+          protocols: [],
+          nextQuestion: "What brings you to the emergency department today?",
+          answerOptions: [
+            { label: "Pain", emoji: "😣" },
+            { label: "Trouble breathing", emoji: "🫁" },
+            { label: "Chest pain", emoji: "💔" },
+            { label: "Stomach problem", emoji: "🤢" },
+            { label: "Fever or infection", emoji: "🤒" },
+            { label: "Injury or fall", emoji: "🩹" },
+            { label: "Dizziness or fainting", emoji: "💫" },
+            { label: "Something else", emoji: "❓" },
+          ],
+          readyForAssessment: false,
+          readinessRationale: "Awaiting chief complaint.",
+        },
         assessment: null,
       });
     }
@@ -394,18 +386,19 @@ export async function POST(request: NextRequest) {
       })
       .join("\n");
     const protocolAnalysis = analyzeInterviewProtocols(messages);
+    const exhaustedBlock = buildExhaustedTopicsBlock(messages);
 
     const openai = getOpenAI();
     const result = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.1,
-      max_tokens: 1800,
+      model: "gpt-4o",
+      temperature: 0.05,
+      max_tokens: 1200,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: INTERVIEW_PROMPT },
         {
           role: "user",
-          content: `INTERVIEW TRANSCRIPT:\n${transcript}\n\n${protocolAnalysis.promptBlock}`,
+          content: `INTERVIEW TRANSCRIPT:\n${transcript}\n\n${protocolAnalysis.promptBlock}\n\n${exhaustedBlock}`,
         },
       ],
     });

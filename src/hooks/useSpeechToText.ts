@@ -12,6 +12,12 @@ export function useSpeechToText() {
       setError(null);
 
       try {
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          throw new Error(
+            "Voice transcription needs connectivity. Type or use quick phrases while offline."
+          );
+        }
+
         const formData = new FormData();
         const mime = audioBlob.type || "audio/webm";
         const ext = mime.includes("mp4") ? "mp4"

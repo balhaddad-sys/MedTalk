@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ClinicalSummaryData, Message } from "@/types";
+import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 
 interface ClinicalSummaryProps {
   messages: Message[];
@@ -45,9 +46,14 @@ export default function ClinicalSummary({ messages }: ClinicalSummaryProps) {
   const [summary, setSummary] = useState<ClinicalSummaryData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isOnline = useNetworkStatus();
 
   const generateSummary = async () => {
     if (messages.length === 0) return;
+    if (!isOnline) {
+      setError("Structured summary needs connectivity. Translation and saved notes remain available offline.");
+      return;
+    }
     setIsLoading(true);
     setError(null);
 
@@ -95,7 +101,7 @@ export default function ClinicalSummary({ messages }: ClinicalSummaryProps) {
       {!summary ? (
         <button
           onClick={generateSummary}
-          disabled={isLoading}
+          disabled={isLoading || !isOnline}
           className="w-full rounded-3xl border border-primary-200 bg-white/90 px-4 py-3 text-left shadow-[0_10px_24px_rgba(79,70,229,0.08)] transition-colors hover:bg-primary-50/60 disabled:opacity-50"
         >
           <div className="flex items-center gap-3">
@@ -107,7 +113,9 @@ export default function ClinicalSummary({ messages }: ClinicalSummaryProps) {
                 Generate structured chart summary
               </p>
               <p className="text-xs leading-relaxed text-slate-500">
-                Draft a concise note plus a verification checklist before charting.
+                {isOnline
+                  ? "Draft a concise note plus a verification checklist before charting."
+                  : "Summary generation pauses offline, but the encounter transcript stays on this device."}
               </p>
             </div>
             {isLoading && (

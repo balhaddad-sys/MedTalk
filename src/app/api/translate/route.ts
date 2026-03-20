@@ -113,7 +113,11 @@ function resolveName(code: string): string {
   return LANG_NAMES[code] || LANG_NAMES[code.split("-")[0]] || code;
 }
 
-function buildSystemPrompt(sourceCode: string | undefined, targetCode: string): string {
+function buildSystemPrompt(
+  sourceCode: string | undefined,
+  targetCode: string,
+  includeVerification: boolean
+): string {
   const sourceName = sourceCode ? resolveName(sourceCode) : "the detected source language";
   const targetName = resolveName(targetCode);
 
@@ -121,6 +125,22 @@ function buildSystemPrompt(sourceCode: string | undefined, targetCode: string): 
   const sourceRules = sourceCode && sourceCode !== targetCode
     ? LANG_RULES[sourceCode] || LANG_RULES[sourceCode.split("-")[0]] || ""
     : "";
+
+  if (!includeVerification) {
+    return `You are a fast medical interpreter translating from ${sourceName} to ${targetName}.
+
+Rules:
+1. Preserve exact meaning, symptom severity, medications, numbers, units, and body locations.
+2. Use natural, formal hospital language in ${targetName}.
+3. Do not add explanations or commentary.
+${targetRules ? `4. Follow these target-language rules:\n${targetRules}\n` : ""}
+
+Return JSON only:
+{
+  "translated_text": "final translation in ${targetName}",
+  "confidence": "high" | "medium" | "low"
+}`;
+  }
 
   return `You are a world-class certified medical interpreter with 20 years of experience translating between ${sourceName} and ${targetName} in hospital and clinical settings.
 
@@ -198,7 +218,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { text, source_lang, target_lang } = await request.json();
+    const {
+      text,
+      source_lang,
+      target_lang,
+      mode,
+      include_verification,
+    } = await request.json();
+    const translationMode = mode === "fast" ? "fast" : "precision";
+    const includeVerification =
+      typeof include_verification === "boolean"
+        ? include_verification
+        : translationMode !== "fast";
 
     if (!text || !target_lang) {
       return NextResponse.json({ error: "Missing required fields: text, target_lang" }, { status: 400 });
@@ -220,7 +251,9 @@ export async function POST(request: NextRequest) {
 
     const isEmergency = detectEmergency(cleanText);
     const openai = getOpenAI();
-    const systemPrompt = buildSystemPrompt(source_lang, target_lang);
+    const systemPrompt = buildSystemPrompt(source_lang, target_lang, includeVerification);
+    const model = "gpt-4o";
+    const maxTokens = includeVerification ? 1200 : 600;
 
     const sourceName = source_lang ? resolveName(source_lang) : null;
     const targetName = resolveName(target_lang);
@@ -229,9 +262,9 @@ export async function POST(request: NextRequest) {
       : `Translate to ${targetName}:\n\n${cleanText}`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model,
       temperature: 0,
-      max_tokens: 2048,
+      max_tokens: maxTokens,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },
@@ -256,11 +289,12 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       translated_text: translatedText,
-      back_translation: backTranslation || undefined,
+      back_translation: includeVerification ? backTranslation || undefined : undefined,
       confidence,
-      medical_terms: medicalTerms,
+      medical_terms: includeVerification ? medicalTerms : [],
       is_emergency: isEmergency,
-      model: "gpt-4o",
+      model,
+      translation_source: "cloud",
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Translation failed";

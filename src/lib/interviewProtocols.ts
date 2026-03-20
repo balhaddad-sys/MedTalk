@@ -563,7 +563,13 @@ export function applyProtocolGuidance(
     ...protocolUnscreened.filter((label) => !existingUnscreened.has(label.toLowerCase())),
   ];
 
-  const nextQuestion = highestGap ? highestGap.item.question : reasoning.nextQuestion;
+  // Only override nextQuestion with protocol gap if the AI's question is empty or
+  // if the protocol gap is critical AND the AI picked a routine topic.
+  // This prevents overriding the AI's de-duplication logic with already-asked protocol questions.
+  const shouldOverride = highestGap &&
+    highestGap.item.priority === "critical" &&
+    (!reasoning.nextQuestion || reasoning.nextQuestion === "What worries you the most right now?");
+  const nextQuestion = shouldOverride ? highestGap!.item.question : reasoning.nextQuestion;
   const highestPriorityGap = highestGap
     ? {
         label: highestGap.item.label,

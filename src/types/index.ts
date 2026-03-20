@@ -7,6 +7,11 @@ export interface Language {
 }
 
 export type ConfidenceLevel = "high" | "medium" | "low";
+export type TranslationSource =
+  | "cloud"
+  | "offline_memory"
+  | "offline_phrasebook"
+  | "local_passthrough";
 export type CoverageStatus = "done" | "partial" | "missing" | "not_applicable";
 export type DifferentialLikelihood = ConfidenceLevel | "excluded";
 export type DifferentialUrgency = "critical" | "urgent" | "routine";
@@ -26,12 +31,15 @@ export interface Message {
   audioUrl?: string;
   isEmergency?: boolean;
   edited?: boolean;
+  translationSource?: TranslationSource;
 }
 
 export interface TranslateRequest {
   text: string;
   source_lang?: string;
   target_lang: string;
+  mode?: "precision" | "fast";
+  include_verification?: boolean;
 }
 
 export interface TranslateResponse {
@@ -41,6 +49,7 @@ export interface TranslateResponse {
   medical_terms?: string[];
   is_emergency?: boolean;
   model: string;
+  translation_source?: TranslationSource;
 }
 
 export type RecordingState = "idle" | "recording" | "processing";

@@ -12,8 +12,11 @@ import {
   Message,
   TranslateResponse,
 } from "@/types";
+import { loadEncounterState, saveEncounterState } from "@/lib/encounterStorage";
 import { getLanguageByCode, languages } from "@/lib/languages";
+import { hasOfflinePackForPair } from "@/lib/offlineTranslation";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
+import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useSpeechToText } from "@/hooks/useSpeechToText";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useTextToSpeech } from "@/hooks/useTextToSpeech";
@@ -28,6 +31,20 @@ function getConfidenceLabel(c: ConfidenceLevel): string {
   if (c === "high") return "High confidence";
   if (c === "medium") return "Medium confidence";
   return "Low confidence";
+}
+
+function getTranslationSourceClasses(source?: Message["translationSource"]): string {
+  if (source === "offline_phrasebook") return "bg-cyan-100 text-cyan-700";
+  if (source === "offline_memory") return "bg-slate-200 text-slate-700";
+  if (source === "local_passthrough") return "bg-violet-100 text-violet-700";
+  return "bg-slate-100 text-slate-500";
+}
+
+function getTranslationSourceLabel(source?: Message["translationSource"]): string {
+  if (source === "offline_phrasebook") return "Offline phrase pack";
+  if (source === "offline_memory") return "Saved offline";
+  if (source === "local_passthrough") return "Same language";
+  return "Cloud";
 }
 
 function FeatureCard({ title, description }: { title: string; description: string }) {
@@ -80,8 +97,10 @@ export default function Home() {
   const [currentQuestion, setCurrentQuestion] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const interviewHistoryRef = useRef<{ role: "patient" | "provider"; text: string }[]>([]);
+  const [readyToPersist, setReadyToPersist] = useState(false);
 
   const rec = useAudioRecorder();
+  const isOnline = useNetworkStatus();
   const stt = useSpeechToText();
   const tr = useTranslation();
   const tts = useTextToSpeech();
@@ -91,10 +110,49 @@ export default function Home() {
   const pL = getLanguageByCode(patientLang);
   const dL = getLanguageByCode(providerLang);
   const emergencyDetected = messages.some((message) => message.isEmergency);
+  const offlinePackReady = hasOfflinePackForPair(patientLang, providerLang);
+  const aiOperational = autoInterview && isOnline;
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages.length]);
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(null), 4000); return () => clearTimeout(t); }, [error]);
   useEffect(() => { if (reasoning || assessment) setShowReasoning(true); }, [reasoning, assessment]);
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      // Offline enhancements should fail softly.
+    });
+  }, []);
+  useEffect(() => {
+    const persisted = loadEncounterState();
+    if (persisted) {
+      setPatientLang(persisted.patientLang);
+      setProviderLang(persisted.providerLang);
+      setMessages(persisted.messages);
+      setAssessment(persisted.assessment);
+      setReasoning(persisted.reasoning);
+      setActiveSide(persisted.activeSide);
+      setAutoInterview(persisted.autoInterview);
+      setNonVerbal(persisted.nonVerbal);
+      interviewHistoryRef.current = persisted.interviewHistory;
+    }
+    setReadyToPersist(true);
+  }, []);
+  useEffect(() => {
+    if (!readyToPersist) return;
+
+    saveEncounterState({
+      patientLang,
+      providerLang,
+      messages,
+      assessment,
+      reasoning,
+      activeSide,
+      autoInterview,
+      nonVerbal,
+      interviewHistory: interviewHistoryRef.current,
+    });
+  }, [readyToPersist, patientLang, providerLang, messages, assessment, reasoning, activeSide, autoInterview, nonVerbal]);
 
   /* ─── AI Interview: get next clinical question ─── */
   const askFollowUp = useCallback(async (history: { role: "patient" | "provider"; text: string }[]) => {
@@ -117,7 +175,14 @@ export default function Home() {
   const send = useCallback(async (txt: string, from: string, to: string, role: "patient" | "provider") => {
     setError(null);
     try {
-      const r: TranslateResponse = await tr.translate(txt, from, to);
+      const r: TranslateResponse = await tr.translate(
+        txt,
+        from,
+        to,
+        role === "patient"
+          ? { mode: "precision", includeVerification: true }
+          : { mode: "fast", includeVerification: false }
+      );
       const m: Message = {
         id: Date.now().toString(),
         role,
@@ -130,16 +195,19 @@ export default function Home() {
         targetLang: to,
         timestamp: Date.now(),
         isEmergency: r.is_emergency,
+        translationSource: r.translation_source,
       };
-      try { m.audioUrl = await tts.speak(r.translated_text, to); } catch {}
       setMessages(p => [...p, m]);
 
       const clinicalText = role === "patient" ? r.translated_text : txt;
       interviewHistoryRef.current = [...interviewHistoryRef.current, { role, text: clinicalText }];
 
       return r;
-    } catch { setError("Translation failed. Try again."); return null; }
-  }, [tr, tts]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Translation failed. Try again.");
+      return null;
+    }
+  }, [tr]);
 
   // Process AI follow-up response: translate, add as message, update reasoning
   const handleFollowUp = useCallback(async (followUp: InterviewResponse, targetPatientLang: string) => {
@@ -157,9 +225,15 @@ export default function Home() {
     if (!followUp.question) return;
     setCurrentQuestion(followUp.question);
     interviewHistoryRef.current = [...interviewHistoryRef.current, { role: "provider", text: followUp.question }];
-    const trResult: TranslateResponse = await tr.translate(followUp.question, "en", targetPatientLang);
+    const trResult: TranslateResponse = await tr.translate(
+      followUp.question,
+      "en",
+      targetPatientLang,
+      { mode: "precision", includeVerification: true }
+    );
+    const msgId = (Date.now() + 1).toString();
     const providerMsg: Message = {
-      id: (Date.now() + 1).toString(), role: "provider", originalText: followUp.question,
+      id: msgId, role: "provider", originalText: followUp.question,
       translatedText: trResult.translated_text,
       backTranslation: trResult.back_translation,
       confidence: trResult.confidence,
@@ -168,21 +242,28 @@ export default function Home() {
       targetLang: targetPatientLang,
       timestamp: Date.now(),
       isEmergency: trResult.is_emergency,
+      translationSource: trResult.translation_source,
     };
-    try { providerMsg.audioUrl = await tts.speak(trResult.translated_text, targetPatientLang); } catch {}
     setMessages(p => [...p, providerMsg]);
+    // Auto-play AI question to patient
+    try {
+      const audioUrl = await tts.speak(trResult.translated_text, targetPatientLang);
+      if (audioUrl) {
+        setMessages(p => p.map(x => x.id === msgId ? { ...x, audioUrl } : x));
+      }
+    } catch { /* TTS failed, not critical */ }
   }, [tr, tts]);
 
   // After patient speaks, auto-generate next clinical question
   const sendAndFollowUp = useCallback(async (txt: string, from: string, to: string, role: "patient" | "provider") => {
     const r = await send(txt, from, to, role);
-    if (!r || !autoInterview || role !== "patient" || assessment) return;
+    if (!r || !autoInterview || !isOnline || role !== "patient" || assessment) return;
 
     try {
       const followUp = await askFollowUp(interviewHistoryRef.current);
       await handleFollowUp(followUp, from);
     } catch { /* follow-up failed silently, user can still interact manually */ }
-  }, [send, autoInterview, assessment, askFollowUp, handleFollowUp]);
+  }, [send, autoInterview, isOnline, assessment, askFollowUp, handleFollowUp]);
 
   const processBlob = useCallback(async (blob: Blob) => {
     setError(null);
@@ -199,9 +280,13 @@ export default function Home() {
   }, [activeSide, patientLang, providerLang, stt, send, sendAndFollowUp, rec]);
 
   const mic = useCallback(async () => {
+    if (!recording && !isOnline) {
+      setError("Voice transcription needs connectivity. Type or use quick phrases while offline.");
+      return;
+    }
     if (recording) { const b = await rec.stopRecording(); if (b) await processBlob(b); }
     else if (rec.recordingState === "idle") { setError(null); rec.startRecording(); }
-  }, [recording, rec, processBlob]);
+  }, [recording, isOnline, rec, processBlob]);
 
   const sendText = useCallback(async () => {
     const v = text.trim(); if (!v) return; setText("");
@@ -217,22 +302,29 @@ export default function Home() {
   const phrase = useCallback(async (t: string) => {
     setSheet(null); rec.setRecordingState("processing");
     const r = await send(t, "en", providerLang, "patient");
-    if (r && autoInterview && !assessment) {
+    if (r && autoInterview && isOnline && !assessment) {
       try {
         const followUp = await askFollowUp(interviewHistoryRef.current);
         await handleFollowUp(followUp, patientLang);
       } catch {}
     }
     rec.setRecordingState("idle");
-  }, [providerLang, patientLang, send, autoInterview, assessment, askFollowUp, handleFollowUp, rec]);
+  }, [providerLang, patientLang, send, autoInterview, isOnline, assessment, askFollowUp, handleFollowUp, rec]);
 
   const play = useCallback(async (m: Message) => {
     if (playingId === m.id) { tts.stop(); setPlayingId(null); return; }
     setPlayingId(m.id);
     try {
       if (m.audioUrl) await tts.playUrl(m.audioUrl);
-      else { const u = await tts.speak(m.translatedText, m.targetLang); setMessages(p => p.map(x => x.id === m.id ? { ...x, audioUrl: u } : x)); }
-    } catch {}
+      else {
+        const u = await tts.speak(m.translatedText, m.targetLang);
+        if (u) {
+          setMessages(p => p.map(x => x.id === m.id ? { ...x, audioUrl: u } : x));
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not play audio.");
+    }
     setPlayingId(null);
   }, [playingId, tts]);
 
@@ -248,6 +340,24 @@ export default function Home() {
   }, []);
 
   // Non-verbal: tap an answer option → send as patient response
+  const toggleNonVerbal = useCallback(() => {
+    if (!nonVerbal && !isOnline) {
+      setError("Non-verbal AI interview needs connectivity. Use typed translation or quick phrases while offline.");
+      return;
+    }
+
+    setNonVerbal((value) => !value);
+    if (!nonVerbal) setAutoInterview(true);
+  }, [nonVerbal, isOnline]);
+  const toggleAutoInterview = useCallback(() => {
+    if (!autoInterview && !isOnline) {
+      setError("AI follow-up needs connectivity. Translation still works offline.");
+      return;
+    }
+
+    setAutoInterview((value) => !value);
+  }, [autoInterview, isOnline]);
+
   const tapOption = useCallback(async (option: AnswerOption) => {
     if (busy || assessment) return;
     setAnswerOptions([]);
@@ -258,7 +368,12 @@ export default function Home() {
     interviewHistoryRef.current = [...interviewHistoryRef.current, { role: "patient", text: patientAnswer }];
     // Translate to provider language and show in messages
     try {
-      const r: TranslateResponse = await tr.translate(patientAnswer, "en", providerLang);
+      const r: TranslateResponse = await tr.translate(
+        patientAnswer,
+        "en",
+        providerLang,
+        { mode: "fast", includeVerification: false }
+      );
       const m: Message = {
         id: Date.now().toString(), role: "patient", originalText: patientAnswer,
         translatedText: r.translated_text,
@@ -268,6 +383,7 @@ export default function Home() {
         sourceLang: "en", targetLang: providerLang,
         timestamp: Date.now(),
         isEmergency: r.is_emergency,
+        translationSource: r.translation_source,
       };
       setMessages(p => [...p, m]);
     } catch {
@@ -280,23 +396,29 @@ export default function Home() {
       setMessages(p => [...p, m]);
     }
     // Get next AI question
-    try {
-      const followUp = await askFollowUp(interviewHistoryRef.current);
-      await handleFollowUp(followUp, patientLang);
-    } catch {}
+    if (isOnline) {
+      try {
+        const followUp = await askFollowUp(interviewHistoryRef.current);
+        await handleFollowUp(followUp, patientLang);
+      } catch {}
+    }
     rec.setRecordingState("idle");
-  }, [busy, assessment, rec, tr, providerLang, patientLang, askFollowUp, handleFollowUp]);
+  }, [busy, assessment, rec, tr, providerLang, patientLang, isOnline, askFollowUp, handleFollowUp]);
 
   // Non-verbal: start interview by asking opening question
   const startNonVerbalInterview = useCallback(async () => {
     if (busy) return;
+    if (!isOnline) {
+      setError("Non-verbal AI interview needs connectivity. Use typed translation or quick phrases while offline.");
+      return;
+    }
     setInterviewLoading(true);
     try {
       const followUp = await askFollowUp([]);
       await handleFollowUp(followUp, patientLang);
     } catch {}
     setInterviewLoading(false);
-  }, [busy, askFollowUp, handleFollowUp, patientLang]);
+  }, [busy, isOnline, askFollowUp, handleFollowUp, patientLang]);
   const openLang = (side: "patient" | "provider") => { setEditingSide(side); setLangQ(""); setSheet("lang"); };
   const dur = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
 
@@ -330,18 +452,29 @@ export default function Home() {
                   Clear
                 </button>
               )}
-              <button onClick={() => { setNonVerbal(v => !v); if (!nonVerbal) setAutoInterview(true); }}
+              <button onClick={toggleNonVerbal}
                 className={`text-[10px] font-bold px-2 py-1 rounded-lg transition-all ${nonVerbal ? "bg-purple-100 text-purple-700" : "bg-slate-100 text-slate-400"}`}>
                 {nonVerbal ? "Non-Verbal" : "Voice"}
               </button>
-              <button onClick={() => setAutoInterview(v => !v)}
-                className={`text-[10px] font-bold px-2 py-1 rounded-lg transition-all ${autoInterview ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"}`}>
-                {autoInterview ? "AI ON" : "AI OFF"}
+              <button onClick={toggleAutoInterview}
+                className={`text-[10px] font-bold px-2 py-1 rounded-lg transition-all ${aiOperational ? "bg-emerald-100 text-emerald-700" : autoInterview ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-400"}`}>
+                {aiOperational ? "AI ON" : autoInterview ? "AI WAIT" : "AI OFF"}
               </button>
             </div>
           </div>
 
           {/* Language bar — stacks labels vertically for small screens */}
+          {!isOnline && (
+            <div className="mb-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-700">Offline Emergency Mode</p>
+              <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                {offlinePackReady
+                  ? `This device will keep the encounter on-device and can still translate saved phrases plus the built-in ${pL?.label}/${dL?.label} emergency pack. Voice transcription and AI follow-up need connectivity.`
+                  : "This device will keep the encounter on-device and can still use saved translations offline. Voice transcription and AI follow-up need connectivity, and this language pair does not have a built-in emergency pack yet."}
+              </p>
+            </div>
+          )}
+
           <div className="flex items-stretch gap-1.5">
             <button onClick={() => openLang("patient")} className="flex-1 flex items-center gap-2 py-2 px-2.5 sm:px-3 bg-slate-50 active:bg-slate-100 rounded-xl transition-all min-h-[48px] active:scale-[0.98] overflow-hidden">
               <span className="text-xl leading-none shrink-0">{pL?.flag}</span>
@@ -449,19 +582,25 @@ export default function Home() {
               <h2 className="text-xl font-extrabold text-slate-800 mb-1.5">{nonVerbal ? "Non-Verbal Interview" : "Safer Medical Translation"}</h2>
               <p className="text-[13px] text-slate-400 text-center max-w-[280px] mb-8 leading-relaxed">
                 {nonVerbal
-                  ? "Tap-based clinical interview for patients who cannot speak. The AI asks questions and the patient taps answers."
-                  : `Speak, type, or pick a phrase to translate between ${pL?.label} and ${dL?.label}, then review confidence, back-translation, and chart-ready notes.`
+                  ? isOnline
+                    ? "Tap-based clinical interview for patients who cannot speak. The AI asks questions and the patient taps answers."
+                    : "The tap-based AI interview pauses offline. Use typed translation or the emergency phrase pack until connectivity returns."
+                  : isOnline
+                    ? `Speak, type, or pick a phrase to translate between ${pL?.label} and ${dL?.label}, then review confidence, back-translation, and chart-ready notes.`
+                    : offlinePackReady
+                      ? `Type or tap a phrase to use saved translations and the built-in ${pL?.label}/${dL?.label} emergency pack while offline.`
+                      : "Type or tap a phrase to use saved translations while offline. This language pair needs connectivity for new translations beyond the built-in pack."
                 }
               </p>
 
               {nonVerbal ? (
                 <button
                   onClick={startNonVerbalInterview}
-                  disabled={busy}
+                  disabled={busy || !isOnline}
                   className="w-full max-w-xs flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-br from-purple-500 to-purple-700 text-white rounded-2xl text-base font-bold shadow-lg shadow-purple-500/30 active:scale-[0.97] disabled:opacity-40 transition-all"
                 >
                   <span className="text-2xl">{"👆"}</span>
-                  Start Interview
+                  {isOnline ? "Start Interview" : "Needs Signal"}
                 </button>
               ) : (
                 <>
@@ -493,6 +632,10 @@ export default function Home() {
                 <FeatureCard
                   title="Structured Summary"
                   description="Generate a draft note with a verification checklist before charting."
+                />
+                <FeatureCard
+                  title="Offline Safe"
+                  description="The app shell, active encounter, and saved translations stay on this device for emergency use."
                 />
               </div>
             </div>
@@ -569,6 +712,11 @@ export default function Home() {
                       {m.confidence && (
                         <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${getConfidenceClasses(m.confidence)}`}>
                           {getConfidenceLabel(m.confidence)}
+                        </span>
+                      )}
+                      {m.translationSource && m.translationSource !== "cloud" && (
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${getTranslationSourceClasses(m.translationSource)}`}>
+                          {getTranslationSourceLabel(m.translationSource)}
                         </span>
                       )}
                       {(m.medicalTerms ?? []).slice(0, 4).map((term) => (
@@ -727,13 +875,17 @@ export default function Home() {
                   ? "bg-red-500 recording-glow scale-105"
                   : busy
                     ? "bg-slate-200"
-                    : "bg-gradient-to-br from-primary-500 to-primary-700 shadow-lg shadow-primary-500/30 active:scale-90"
+                    : !isOnline
+                      ? "bg-gradient-to-br from-amber-400 to-amber-500 shadow-lg shadow-amber-400/30 active:scale-90"
+                      : "bg-gradient-to-br from-primary-500 to-primary-700 shadow-lg shadow-primary-500/30 active:scale-90"
                 }`}
-              aria-label={recording ? "Stop recording" : "Start recording"}>
+              aria-label={recording ? "Stop recording" : !isOnline ? "Voice needs connectivity" : "Start recording"}>
               {busy ? (
                 <svg className="w-5 h-5 text-slate-400 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
               ) : recording ? (
                 <div className="w-5 h-5 rounded-[4px] bg-white" />
+              ) : !isOnline ? (
+                <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" strokeWidth={2.2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v5m0 3h.01M4.93 19h14.14c1.54 0 2.5-1.67 1.73-3L13.73 3c-.77-1.33-2.69-1.33-3.46 0L3.2 16c-.77 1.33.19 3 1.73 3z" /></svg>
               ) : (
                 <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" /></svg>
               )}

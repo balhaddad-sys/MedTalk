@@ -38,6 +38,11 @@ export function useTextToSpeech() {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
+      // Revoke blob URL to prevent memory leaks
+      const src = audioRef.current.src;
+      if (src && src.startsWith("blob:")) {
+        URL.revokeObjectURL(src);
+      }
       audioRef.current = null;
     }
     if (typeof window !== "undefined" && "speechSynthesis" in window) {

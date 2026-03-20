@@ -1,6 +1,8 @@
 const SHELL_CACHE = "medtalk-shell-v2";
 const RUNTIME_CACHE = "medtalk-runtime-v2";
-const APP_SHELL = ["/", "/manifest.json", "/icon-192.png", "/icon-512.png"];
+// Only cache resources that are guaranteed to exist.
+// Icons are best-effort; the SW install should not fail if they're missing.
+const APP_SHELL = ["/", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

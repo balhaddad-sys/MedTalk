@@ -19,6 +19,7 @@ export function checkRateLimit(
   ip: string,
   endpoint: string
 ): { allowed: boolean; retryAfter?: number } {
+  cleanupBuckets();
   const config = configs[endpoint] || configs.translate;
   const key = `${ip}:${endpoint}`;
   const now = Date.now();
@@ -43,15 +44,19 @@ export function checkRateLimit(
   return { allowed: true };
 }
 
-// Clean up old entries periodically
-setInterval(() => {
+// Clean up old entries during rate limit checks to avoid setInterval in serverless environments.
+// This is called lazily rather than on a timer.
+let lastCleanup = Date.now();
+function cleanupBuckets() {
   const now = Date.now();
+  if (now - lastCleanup < 60000) return;
+  lastCleanup = now;
   for (const [key, bucket] of buckets.entries()) {
     if (now - bucket.lastRefill > 300000) {
       buckets.delete(key);
     }
   }
-}, 60000);
+}
 
 export function getClientIp(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for");

@@ -12,7 +12,7 @@ import {
   Message,
   TranslateResponse,
 } from "@/types";
-import { loadEncounterState, saveEncounterState } from "@/lib/encounterStorage";
+import { loadEncounterState, saveEncounterState, clearEncounterState } from "@/lib/encounterStorage";
 import { getLanguageByCode, languages } from "@/lib/languages";
 import { hasOfflinePackForPair } from "@/lib/offlineTranslation";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
@@ -337,6 +337,7 @@ export default function Home() {
     setAnswerOptions([]);
     setCurrentQuestion(null);
     interviewHistoryRef.current = [];
+    clearEncounterState();
   }, []);
 
   // Non-verbal: tap an answer option → send as patient response
@@ -448,15 +449,17 @@ export default function Home() {
             </div>
             <div className="flex items-center gap-2">
               {messages.length > 0 && (
-                <button onClick={clearAll} className="text-[11px] font-semibold text-slate-400 active:text-red-500 px-2 py-1.5 rounded-lg transition-colors">
+                <button onClick={clearAll} aria-label="Clear encounter and start new session" className="text-[11px] font-semibold text-slate-400 active:text-red-500 px-2 py-1.5 rounded-lg transition-colors">
                   Clear
                 </button>
               )}
               <button onClick={toggleNonVerbal}
+                aria-label={nonVerbal ? "Switch to voice mode" : "Switch to non-verbal tap mode"}
                 className={`text-[10px] font-bold px-2 py-1 rounded-lg transition-all ${nonVerbal ? "bg-purple-100 text-purple-700" : "bg-slate-100 text-slate-400"}`}>
                 {nonVerbal ? "Non-Verbal" : "Voice"}
               </button>
               <button onClick={toggleAutoInterview}
+                aria-label={autoInterview ? "Disable AI clinical interview" : "Enable AI clinical interview"}
                 className={`text-[10px] font-bold px-2 py-1 rounded-lg transition-all ${aiOperational ? "bg-emerald-100 text-emerald-700" : autoInterview ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-400"}`}>
                 {aiOperational ? "AI ON" : autoInterview ? "AI WAIT" : "AI OFF"}
               </button>
@@ -638,6 +641,12 @@ export default function Home() {
                   description="The app shell, active encounter, and saved translations stay on this device for emergency use."
                 />
               </div>
+
+              <p className="mt-6 text-[10px] text-center text-slate-400 leading-relaxed max-w-[300px]">
+                MedTalk is an AI translation aid, not a certified medical interpreter.
+                Always verify critical information through qualified interpreters.
+                Not FDA-cleared. Not a substitute for professional medical care.
+              </p>
             </div>
           )}
 

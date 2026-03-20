@@ -29,6 +29,7 @@ interface TranslationMemoryRecord {
 
 const TRANSLATION_MEMORY_KEY = "medtalk.translation-memory.v1";
 const MAX_MEMORY_ENTRIES = 300;
+const MEMORY_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours — expire stale translations
 
 export const OFFLINE_PACK_LANGS = [
   "en",
@@ -529,7 +530,18 @@ function readTranslationMemory(): TranslationMemoryRecord[] {
     if (!raw) return [];
 
     const parsed = JSON.parse(raw) as TranslationMemoryRecord[];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+
+    // Filter out expired entries
+    const now = Date.now();
+    const active = parsed.filter((entry) => now - entry.updatedAt < MEMORY_TTL_MS);
+
+    // Write back if we pruned any entries
+    if (active.length < parsed.length) {
+      writeTranslationMemory(active);
+    }
+
+    return active;
   } catch {
     return [];
   }

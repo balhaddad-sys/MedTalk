@@ -29,7 +29,9 @@ const nextConfig: NextConfig = {
           key: "Content-Security-Policy",
           value: [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+            // Next.js requires unsafe-inline for its runtime styles and inline scripts.
+            // unsafe-eval removed — not needed by the app and reduces XSS surface.
+            "script-src 'self' 'unsafe-inline'",
             "style-src 'self' 'unsafe-inline'",
             "img-src 'self' data: blob:",
             "media-src 'self' blob:",
@@ -38,6 +40,8 @@ const nextConfig: NextConfig = {
             "object-src 'none'",
             "base-uri 'self'",
             "form-action 'self'",
+            "frame-ancestors 'none'",
+            "upgrade-insecure-requests",
           ].join("; "),
         },
       ],

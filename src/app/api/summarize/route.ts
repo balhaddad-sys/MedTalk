@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getOpenAI } from "@/lib/openai";
 import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
 import { parseJsonObject } from "@/lib/json";
+import { sanitizeUserInput, detectPromptInjection } from "@/lib/security";
 import { ClinicalSummaryData } from "@/types";
 
 interface SummaryMessage {
@@ -80,11 +81,28 @@ export async function POST(request: NextRequest) {
 
     const { messages } = (await request.json()) as { messages: SummaryMessage[] };
 
-    if (!Array.isArray(messages) || messages.length === 0) {
+    if (!Array.isArray(messages) || messages.length === 0 || messages.length > 200) {
       return NextResponse.json(
-        { error: "No messages provided" },
+        { error: "No messages provided or too many messages" },
         { status: 400 }
       );
+    }
+
+    // Validate and sanitize each message
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") {
+        return NextResponse.json({ error: "Invalid message format" }, { status: 400 });
+      }
+      const original = typeof msg.originalText === "string" ? msg.originalText : "";
+      const translated = typeof msg.translatedText === "string" ? msg.translatedText : "";
+      if (original.length > 2000 || translated.length > 2000) {
+        return NextResponse.json({ error: "Message text too long" }, { status: 400 });
+      }
+      if (detectPromptInjection(original) || detectPromptInjection(translated)) {
+        return NextResponse.json({ error: "Invalid input detected" }, { status: 400 });
+      }
+      msg.originalText = sanitizeUserInput(original);
+      msg.translatedText = sanitizeUserInput(translated);
     }
 
     const conversation = messages

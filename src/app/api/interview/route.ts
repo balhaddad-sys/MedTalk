@@ -3,6 +3,7 @@ import { getOpenAI } from "@/lib/openai";
 import { analyzeInterviewProtocols, applyProtocolGuidance } from "@/lib/interviewProtocols";
 import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
 import { parseJsonObject } from "@/lib/json";
+import { sanitizeUserInput, detectPromptInjection } from "@/lib/security";
 import {
   AnswerOption,
   AssessmentData,
@@ -344,8 +345,25 @@ export async function POST(request: NextRequest) {
       messages: ConversationMessage[];
     };
 
-    if (!Array.isArray(messages)) {
+    if (!Array.isArray(messages) || messages.length > 200) {
       return NextResponse.json({ error: "Invalid messages" }, { status: 400 });
+    }
+
+    // Validate and sanitize each message
+    for (const msg of messages) {
+      if (!msg || typeof msg.text !== "string" || typeof msg.role !== "string") {
+        return NextResponse.json({ error: "Invalid message format" }, { status: 400 });
+      }
+      if (msg.role !== "patient" && msg.role !== "provider") {
+        return NextResponse.json({ error: "Invalid message role" }, { status: 400 });
+      }
+      if (msg.text.length > 2000) {
+        return NextResponse.json({ error: "Message text too long" }, { status: 400 });
+      }
+      msg.text = sanitizeUserInput(msg.text);
+      if (detectPromptInjection(msg.text)) {
+        return NextResponse.json({ error: "Invalid input detected" }, { status: 400 });
+      }
     }
 
     if (messages.length === 0) {

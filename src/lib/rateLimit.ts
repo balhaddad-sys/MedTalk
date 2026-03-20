@@ -11,6 +11,8 @@ const configs: Record<string, RateLimitConfig> = {
   translate: { maxTokens: 30, refillRate: 0.5, windowMs: 60000 },
   stt: { maxTokens: 10, refillRate: 0.17, windowMs: 60000 },
   tts: { maxTokens: 20, refillRate: 0.33, windowMs: 60000 },
+  interview: { maxTokens: 12, refillRate: 0.15, windowMs: 60000 },
+  summarize: { maxTokens: 8, refillRate: 0.1, windowMs: 60000 },
 };
 
 export function checkRateLimit(

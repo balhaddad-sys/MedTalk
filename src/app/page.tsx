@@ -1,12 +1,43 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Message, TranslateResponse } from "@/types";
+import ClinicalSummary from "@/components/ClinicalSummary";
+import EncounterInsights from "@/components/EncounterInsights";
+import {
+  AnswerOption,
+  AssessmentData,
+  ClinicalReasoningData,
+  ConfidenceLevel,
+  InterviewResponse,
+  Message,
+  TranslateResponse,
+} from "@/types";
 import { getLanguageByCode, languages } from "@/lib/languages";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useSpeechToText } from "@/hooks/useSpeechToText";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useTextToSpeech } from "@/hooks/useTextToSpeech";
+
+function getConfidenceClasses(c: ConfidenceLevel): string {
+  if (c === "high") return "bg-emerald-100 text-emerald-700";
+  if (c === "medium") return "bg-amber-100 text-amber-700";
+  return "bg-red-100 text-red-700";
+}
+
+function getConfidenceLabel(c: ConfidenceLevel): string {
+  if (c === "high") return "High confidence";
+  if (c === "medium") return "Medium confidence";
+  return "Low confidence";
+}
+
+function FeatureCard({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="rounded-2xl bg-white border border-slate-200/60 p-3 shadow-sm">
+      <p className="text-[13px] font-bold text-slate-800">{title}</p>
+      <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">{description}</p>
+    </div>
+  );
+}
 
 /* ─── Quick Phrases ─── */
 const PHRASES = [
@@ -38,41 +69,134 @@ export default function Home() {
   const [editingSide, setEditingSide] = useState<"patient" | "provider">("patient");
   const [langQ, setLangQ] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [autoInterview, setAutoInterview] = useState(true);
+  const [assessment, setAssessment] = useState<AssessmentData | null>(null);
+  const [interviewLoading, setInterviewLoading] = useState(false);
+  const [activeSide, setActiveSide] = useState<"patient" | "provider">("patient");
+  const [reasoning, setReasoning] = useState<ClinicalReasoningData | null>(null);
+  const [showReasoning, setShowReasoning] = useState(false);
+  const [nonVerbal, setNonVerbal] = useState(false);
+  const [answerOptions, setAnswerOptions] = useState<AnswerOption[]>([]);
+  const [currentQuestion, setCurrentQuestion] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const interviewHistoryRef = useRef<{ role: "patient" | "provider"; text: string }[]>([]);
 
   const rec = useAudioRecorder();
   const stt = useSpeechToText();
   const tr = useTranslation();
   const tts = useTextToSpeech();
 
-  const busy = rec.recordingState === "processing" || stt.isLoading || tr.isLoading;
+  const busy = rec.recordingState === "processing" || stt.isLoading || tr.isLoading || interviewLoading;
   const recording = rec.recordingState === "recording";
   const pL = getLanguageByCode(patientLang);
   const dL = getLanguageByCode(providerLang);
+  const emergencyDetected = messages.some((message) => message.isEmergency);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages.length]);
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(null), 4000); return () => clearTimeout(t); }, [error]);
+  useEffect(() => { if (reasoning || assessment) setShowReasoning(true); }, [reasoning, assessment]);
+
+  /* ─── AI Interview: get next clinical question ─── */
+  const askFollowUp = useCallback(async (history: { role: "patient" | "provider"; text: string }[]) => {
+    setInterviewLoading(true);
+    try {
+      const res = await fetch("/api/interview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: history }),
+      });
+      if (!res.ok) throw new Error("Interview API error");
+      const data: InterviewResponse = await res.json();
+      return data;
+    } finally {
+      setInterviewLoading(false);
+    }
+  }, []);
 
   /* ─── Actions ─── */
   const send = useCallback(async (txt: string, from: string, to: string, role: "patient" | "provider") => {
     setError(null);
     try {
       const r: TranslateResponse = await tr.translate(txt, from, to);
-      const m: Message = { id: Date.now().toString(), role, originalText: txt, translatedText: r.translated_text, sourceLang: from, targetLang: to, timestamp: Date.now() };
-      try { m.audioUrl = await tts.speak(r.translated_text); } catch {}
+      const m: Message = {
+        id: Date.now().toString(),
+        role,
+        originalText: txt,
+        translatedText: r.translated_text,
+        backTranslation: r.back_translation,
+        confidence: r.confidence,
+        medicalTerms: r.medical_terms,
+        sourceLang: from,
+        targetLang: to,
+        timestamp: Date.now(),
+        isEmergency: r.is_emergency,
+      };
+      try { m.audioUrl = await tts.speak(r.translated_text, to); } catch {}
       setMessages(p => [...p, m]);
-    } catch { setError("Translation failed. Try again."); }
+
+      const clinicalText = role === "patient" ? r.translated_text : txt;
+      interviewHistoryRef.current = [...interviewHistoryRef.current, { role, text: clinicalText }];
+
+      return r;
+    } catch { setError("Translation failed. Try again."); return null; }
   }, [tr, tts]);
+
+  // Process AI follow-up response: translate, add as message, update reasoning
+  const handleFollowUp = useCallback(async (followUp: InterviewResponse, targetPatientLang: string) => {
+    if (followUp.reasoning) {
+      setReasoning(followUp.reasoning);
+      // Capture answer options for non-verbal mode
+      setAnswerOptions(followUp.reasoning.answerOptions || []);
+    }
+    if (followUp.assessment) {
+      setAssessment(followUp.assessment);
+      setAnswerOptions([]);
+      setCurrentQuestion(null);
+      return;
+    }
+    if (!followUp.question) return;
+    setCurrentQuestion(followUp.question);
+    interviewHistoryRef.current = [...interviewHistoryRef.current, { role: "provider", text: followUp.question }];
+    const trResult: TranslateResponse = await tr.translate(followUp.question, "en", targetPatientLang);
+    const providerMsg: Message = {
+      id: (Date.now() + 1).toString(), role: "provider", originalText: followUp.question,
+      translatedText: trResult.translated_text,
+      backTranslation: trResult.back_translation,
+      confidence: trResult.confidence,
+      medicalTerms: trResult.medical_terms,
+      sourceLang: "en",
+      targetLang: targetPatientLang,
+      timestamp: Date.now(),
+      isEmergency: trResult.is_emergency,
+    };
+    try { providerMsg.audioUrl = await tts.speak(trResult.translated_text, targetPatientLang); } catch {}
+    setMessages(p => [...p, providerMsg]);
+  }, [tr, tts]);
+
+  // After patient speaks, auto-generate next clinical question
+  const sendAndFollowUp = useCallback(async (txt: string, from: string, to: string, role: "patient" | "provider") => {
+    const r = await send(txt, from, to, role);
+    if (!r || !autoInterview || role !== "patient" || assessment) return;
+
+    try {
+      const followUp = await askFollowUp(interviewHistoryRef.current);
+      await handleFollowUp(followUp, from);
+    } catch { /* follow-up failed silently, user can still interact manually */ }
+  }, [send, autoInterview, assessment, askFollowUp, handleFollowUp]);
 
   const processBlob = useCallback(async (blob: Blob) => {
     setError(null);
     try {
-      const t = await stt.transcribe(blob, patientLang);
+      const t = await stt.transcribe(blob, activeSide === "patient" ? patientLang : providerLang);
       if (!t.trim()) { rec.setRecordingState("idle"); setError("Couldn't hear you. Try again."); return; }
-      await send(t, patientLang, providerLang, "patient");
+      if (activeSide === "patient") {
+        await sendAndFollowUp(t, patientLang, providerLang, "patient");
+      } else {
+        await send(t, providerLang, patientLang, "provider");
+      }
       rec.setRecordingState("idle");
     } catch (e) { rec.setRecordingState("idle"); setError(e instanceof Error ? e.message : "Error"); }
-  }, [patientLang, providerLang, stt, send, rec]);
+  }, [activeSide, patientLang, providerLang, stt, send, sendAndFollowUp, rec]);
 
   const mic = useCallback(async () => {
     if (recording) { const b = await rec.stopRecording(); if (b) await processBlob(b); }
@@ -82,27 +206,97 @@ export default function Home() {
   const sendText = useCallback(async () => {
     const v = text.trim(); if (!v) return; setText("");
     rec.setRecordingState("processing");
-    await send(v, patientLang, providerLang, "patient");
+    if (activeSide === "patient") {
+      await sendAndFollowUp(v, patientLang, providerLang, "patient");
+    } else {
+      await send(v, providerLang, patientLang, "provider");
+    }
     rec.setRecordingState("idle");
-  }, [text, patientLang, providerLang, send, rec]);
+  }, [text, activeSide, patientLang, providerLang, send, sendAndFollowUp, rec]);
 
   const phrase = useCallback(async (t: string) => {
     setSheet(null); rec.setRecordingState("processing");
-    await send(t, "en", providerLang, "patient");
+    const r = await send(t, "en", providerLang, "patient");
+    if (r && autoInterview && !assessment) {
+      try {
+        const followUp = await askFollowUp(interviewHistoryRef.current);
+        await handleFollowUp(followUp, patientLang);
+      } catch {}
+    }
     rec.setRecordingState("idle");
-  }, [providerLang, send, rec]);
+  }, [providerLang, patientLang, send, autoInterview, assessment, askFollowUp, handleFollowUp, rec]);
 
   const play = useCallback(async (m: Message) => {
     if (playingId === m.id) { tts.stop(); setPlayingId(null); return; }
     setPlayingId(m.id);
     try {
       if (m.audioUrl) await tts.playUrl(m.audioUrl);
-      else { const u = await tts.speak(m.translatedText); setMessages(p => p.map(x => x.id === m.id ? { ...x, audioUrl: u } : x)); }
+      else { const u = await tts.speak(m.translatedText, m.targetLang); setMessages(p => p.map(x => x.id === m.id ? { ...x, audioUrl: u } : x)); }
     } catch {}
     setPlayingId(null);
   }, [playingId, tts]);
 
   const swap = useCallback(() => { setPatientLang(providerLang); setProviderLang(patientLang); }, [patientLang, providerLang]);
+  const clearAll = useCallback(() => {
+    setMessages([]);
+    setAssessment(null);
+    setReasoning(null);
+    setShowReasoning(false);
+    setAnswerOptions([]);
+    setCurrentQuestion(null);
+    interviewHistoryRef.current = [];
+  }, []);
+
+  // Non-verbal: tap an answer option → send as patient response
+  const tapOption = useCallback(async (option: AnswerOption) => {
+    if (busy || assessment) return;
+    setAnswerOptions([]);
+    rec.setRecordingState("processing");
+    // Send the option label as the patient's response (in English for the AI)
+    const patientAnswer = option.label;
+    // Add to interview history
+    interviewHistoryRef.current = [...interviewHistoryRef.current, { role: "patient", text: patientAnswer }];
+    // Translate to provider language and show in messages
+    try {
+      const r: TranslateResponse = await tr.translate(patientAnswer, "en", providerLang);
+      const m: Message = {
+        id: Date.now().toString(), role: "patient", originalText: patientAnswer,
+        translatedText: r.translated_text,
+        backTranslation: r.back_translation,
+        confidence: r.confidence,
+        medicalTerms: r.medical_terms,
+        sourceLang: "en", targetLang: providerLang,
+        timestamp: Date.now(),
+        isEmergency: r.is_emergency,
+      };
+      setMessages(p => [...p, m]);
+    } catch {
+      // Even if translation fails, keep the answer in history for the AI
+      const m: Message = {
+        id: Date.now().toString(), role: "patient", originalText: patientAnswer,
+        translatedText: patientAnswer, sourceLang: "en", targetLang: providerLang,
+        timestamp: Date.now(),
+      };
+      setMessages(p => [...p, m]);
+    }
+    // Get next AI question
+    try {
+      const followUp = await askFollowUp(interviewHistoryRef.current);
+      await handleFollowUp(followUp, patientLang);
+    } catch {}
+    rec.setRecordingState("idle");
+  }, [busy, assessment, rec, tr, providerLang, patientLang, askFollowUp, handleFollowUp]);
+
+  // Non-verbal: start interview by asking opening question
+  const startNonVerbalInterview = useCallback(async () => {
+    if (busy) return;
+    setInterviewLoading(true);
+    try {
+      const followUp = await askFollowUp([]);
+      await handleFollowUp(followUp, patientLang);
+    } catch {}
+    setInterviewLoading(false);
+  }, [busy, askFollowUp, handleFollowUp, patientLang]);
   const openLang = (side: "patient" | "provider") => { setEditingSide(side); setLangQ(""); setSheet("lang"); };
   const dur = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
 
@@ -113,7 +307,7 @@ export default function Home() {
   });
 
   return (
-    <div className="fixed inset-0 flex flex-col" style={{ height: "100dvh" }}>
+    <div className="h-dvh flex flex-col overflow-hidden">
 
       {/* ═══ HEADER ═══ */}
       <header className="bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shrink-0 safe-top z-20">
@@ -130,11 +324,21 @@ export default function Home() {
                 <p className="text-[9px] text-slate-400 font-medium leading-none mt-0.5">Medical Translation</p>
               </div>
             </div>
-            {messages.length > 0 && (
-              <button onClick={() => setMessages([])} className="text-[11px] font-semibold text-slate-400 active:text-red-500 px-2 py-1.5 rounded-lg transition-colors">
-                Clear
+            <div className="flex items-center gap-2">
+              {messages.length > 0 && (
+                <button onClick={clearAll} className="text-[11px] font-semibold text-slate-400 active:text-red-500 px-2 py-1.5 rounded-lg transition-colors">
+                  Clear
+                </button>
+              )}
+              <button onClick={() => { setNonVerbal(v => !v); if (!nonVerbal) setAutoInterview(true); }}
+                className={`text-[10px] font-bold px-2 py-1 rounded-lg transition-all ${nonVerbal ? "bg-purple-100 text-purple-700" : "bg-slate-100 text-slate-400"}`}>
+                {nonVerbal ? "Non-Verbal" : "Voice"}
               </button>
-            )}
+              <button onClick={() => setAutoInterview(v => !v)}
+                className={`text-[10px] font-bold px-2 py-1 rounded-lg transition-all ${autoInterview ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"}`}>
+                {autoInterview ? "AI ON" : "AI OFF"}
+              </button>
+            </div>
           </div>
 
           {/* Language bar — stacks labels vertically for small screens */}
@@ -242,24 +446,73 @@ export default function Home() {
                   <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>
                 </div>
               </div>
-              <h2 className="text-xl font-extrabold text-slate-800 mb-1.5">Ready to Translate</h2>
-              <p className="text-[13px] text-slate-400 text-center max-w-[250px] mb-8 leading-relaxed">
-                Speak, type, or pick a phrase to start translating between {pL?.label} and {dL?.label}
+              <h2 className="text-xl font-extrabold text-slate-800 mb-1.5">{nonVerbal ? "Non-Verbal Interview" : "Safer Medical Translation"}</h2>
+              <p className="text-[13px] text-slate-400 text-center max-w-[280px] mb-8 leading-relaxed">
+                {nonVerbal
+                  ? "Tap-based clinical interview for patients who cannot speak. The AI asks questions and the patient taps answers."
+                  : `Speak, type, or pick a phrase to translate between ${pL?.label} and ${dL?.label}, then review confidence, back-translation, and chart-ready notes.`
+                }
               </p>
 
-              <div className="w-full grid grid-cols-1 gap-2">
-                {PHRASES.slice(0, 4).map(p => (
-                  <button key={p.text} onClick={() => phrase(p.text)} disabled={busy}
-                    className="w-full flex items-center gap-2.5 px-3.5 py-3 bg-white active:bg-primary-50 border border-slate-200/80 active:border-primary-200 rounded-2xl text-left transition-all disabled:opacity-40 active:scale-[0.98] shadow-sm shadow-slate-100">
-                    <span className="text-lg shrink-0">{p.emoji}</span>
-                    <span className="text-[13px] font-semibold text-slate-700 flex-1">{p.text}</span>
-                    <svg className="w-3.5 h-3.5 text-slate-300 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+              {nonVerbal ? (
+                <button
+                  onClick={startNonVerbalInterview}
+                  disabled={busy}
+                  className="w-full max-w-xs flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-br from-purple-500 to-purple-700 text-white rounded-2xl text-base font-bold shadow-lg shadow-purple-500/30 active:scale-[0.97] disabled:opacity-40 transition-all"
+                >
+                  <span className="text-2xl">{"👆"}</span>
+                  Start Interview
+                </button>
+              ) : (
+                <>
+                  <div className="w-full grid grid-cols-1 gap-2">
+                    {PHRASES.slice(0, 4).map(p => (
+                      <button key={p.text} onClick={() => phrase(p.text)} disabled={busy}
+                        className="w-full flex items-center gap-2.5 px-3.5 py-3 bg-white active:bg-primary-50 border border-slate-200/80 active:border-primary-200 rounded-2xl text-left transition-all disabled:opacity-40 active:scale-[0.98] shadow-sm shadow-slate-100">
+                        <span className="text-lg shrink-0">{p.emoji}</span>
+                        <span className="text-[13px] font-semibold text-slate-700 flex-1">{p.text}</span>
+                        <svg className="w-3.5 h-3.5 text-slate-300 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => setSheet("phrases")} className="mt-4 text-[13px] font-semibold text-primary-500 active:text-primary-700 py-1.5">
+                    See all phrases
                   </button>
-                ))}
+                </>
+              )}
+
+              <div className="mt-6 w-full grid gap-2">
+                <FeatureCard
+                  title="Translation Review"
+                  description="See confidence, back-translation, and important medical terms on each message."
+                />
+                <FeatureCard
+                  title="Clinical Gap Tracking"
+                  description="Auto-interview surfaces missing history, red flags, and the next best question."
+                />
+                <FeatureCard
+                  title="Structured Summary"
+                  description="Generate a draft note with a verification checklist before charting."
+                />
               </div>
-              <button onClick={() => setSheet("phrases")} className="mt-4 text-[13px] font-semibold text-primary-500 active:text-primary-700 py-1.5">
-                See all phrases
-              </button>
+            </div>
+          )}
+
+          {emergencyDetected && (
+            <div className="msg-enter mb-3 rounded-3xl border border-red-200 bg-red-50 p-4 shadow-[0_12px_24px_rgba(239,68,68,0.12)]">
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-red-600 text-white flex items-center justify-center shrink-0">
+                  <span className="text-lg">{"\u{1F6A8}"}</span>
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-extrabold uppercase tracking-[0.16em] text-red-700">
+                    Urgent Safety Review
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-red-900">
+                    Emergency language was detected in the conversation. Verify airway, breathing, circulation, and immediate patient safety before relying on translation details.
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
@@ -271,26 +524,35 @@ export default function Home() {
               const playing = playingId === m.id;
               const t = new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
               return (
-                <div key={m.id} className="msg-enter rounded-[20px] bg-white border border-slate-200/60 shadow-[0_1px_3px_rgba(0,0,0,0.04)] overflow-hidden">
-                  {/* Source */}
-                  <div className="px-4 pt-3.5 pb-2.5">
-                    <div className="flex items-center gap-1.5 mb-1.5">
-                      <span className="text-[13px]">{sL?.flag}</span>
-                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">{sL?.label}</span>
-                      <span className="text-[10px] text-slate-300 ml-auto">{t}</span>
+                <div key={m.id} className="msg-enter rounded-3xl bg-white border border-slate-200/70 shadow-[0_10px_28px_rgba(15,23,42,0.05)] overflow-hidden">
+                  <div className="px-3 sm:px-4 pt-3 pb-2">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                        m.role === "provider" ? "bg-emerald-100 text-emerald-700" : "bg-primary-100 text-primary-700"
+                      }`}>
+                        {m.role}
+                      </span>
+                      <span className="text-xs">{sL?.flag}</span>
+                      <span className="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase tracking-wider truncate">{sL?.label}</span>
+                      <span className="text-[10px] text-slate-300 ml-auto shrink-0">{t}</span>
                     </div>
-                    <p className="text-[14px] text-slate-600 leading-[1.6]" dir={sL?.dir === "rtl" ? "rtl" : "ltr"}>{m.originalText}</p>
+                    <p className="text-[13px] sm:text-[14px] text-slate-600 leading-relaxed break-words" dir={sL?.dir === "rtl" ? "rtl" : "ltr"}>{m.originalText}</p>
                   </div>
 
-                  {/* Translation */}
+                  {m.isEmergency && (
+                    <div className="mx-3 sm:mx-4 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                      Urgent wording detected in this message. Confirm immediate safety needs.
+                    </div>
+                  )}
+
                   <div className="mx-3 h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent" />
-                  <div className="px-4 pt-2.5 pb-3.5 bg-gradient-to-b from-primary-50/30 to-transparent">
-                    <div className="flex items-center gap-1.5 mb-1.5">
-                      <span className="text-[13px]">{tL?.flag}</span>
-                      <span className="text-[11px] font-bold text-primary-500 uppercase tracking-wider">{tL?.label}</span>
+                  <div className="px-3 sm:px-4 pt-2 pb-3 bg-gradient-to-b from-primary-50/30 to-transparent">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-xs">{tL?.flag}</span>
+                      <span className="text-[10px] sm:text-[11px] font-bold text-primary-500 uppercase tracking-wider truncate">{tL?.label}</span>
                       <button onClick={() => play(m)}
-                        className={`ml-auto flex items-center gap-1.5 pl-2.5 pr-3 py-1 rounded-full min-h-[30px] transition-all active:scale-95 ${
-                          playing ? "bg-primary-600 text-white shadow-md shadow-primary-500/20" : "bg-primary-50 text-primary-600 hover:bg-primary-100"}`}>
+                        className={`ml-auto flex items-center gap-1 pl-2 pr-2.5 py-1 rounded-full min-h-[28px] sm:min-h-[30px] transition-all active:scale-95 shrink-0 ${
+                          playing ? "bg-primary-600 text-white shadow-md shadow-primary-500/20" : "bg-primary-50 text-primary-600 active:bg-primary-100"}`}>
                         {playing ? (
                           <div className="flex items-center gap-[3px] h-3.5">
                             {[0,1,2,3].map(i => <div key={i} className="w-[3px] bg-white rounded-full animate-sound-wave" style={{ animationDelay: `${i*0.1}s`, height: "4px" }} />)}
@@ -298,15 +560,93 @@ export default function Home() {
                         ) : (
                           <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
                         )}
-                        <span className="text-[11px] font-bold">{playing ? "Stop" : "Play"}</span>
+                        <span className="text-[10px] sm:text-[11px] font-bold">{playing ? "Stop" : "Play"}</span>
                       </button>
                     </div>
-                    <p className="text-[15px] font-semibold text-slate-800 leading-[1.6]" dir={tL?.dir === "rtl" ? "rtl" : "ltr"}>{m.translatedText}</p>
+                    <p className="text-sm sm:text-[15px] font-semibold text-slate-800 leading-relaxed break-words" dir={tL?.dir === "rtl" ? "rtl" : "ltr"}>{m.translatedText}</p>
+
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {m.confidence && (
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${getConfidenceClasses(m.confidence)}`}>
+                          {getConfidenceLabel(m.confidence)}
+                        </span>
+                      )}
+                      {(m.medicalTerms ?? []).slice(0, 4).map((term) => (
+                        <span
+                          key={`${m.id}-${term}`}
+                          className="rounded-full border border-primary-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-primary-700"
+                        >
+                          {term}
+                        </span>
+                      ))}
+                    </div>
+
+                    {m.backTranslation && (
+                      <div className="mt-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-600">
+                          Back-Translation Check
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                          {m.backTranslation}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
             })}
           </div>
+
+          {messages.length > 0 && (
+            <div className="mt-4 space-y-3">
+              <button
+                onClick={() => setShowReasoning(v => !v)}
+                className="w-full flex items-center gap-2 px-3 py-3 rounded-2xl bg-indigo-50 border border-indigo-200/70 active:bg-indigo-100 transition-all"
+              >
+                <svg className={`w-3.5 h-3.5 text-indigo-500 transition-transform ${showReasoning ? "rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                <div className="text-left">
+                  <p className="text-[11px] font-bold text-indigo-600 uppercase tracking-[0.18em]">Clinical Workspace</p>
+                  <p className="text-xs text-indigo-500">Provider-only review panel for gaps, differentials, and chart draft</p>
+                </div>
+                <span className="text-[10px] text-indigo-500 ml-auto bg-white px-2.5 py-1 rounded-full font-bold">
+                  {assessment ? "Assessment ready" : reasoning ? "Live" : "Open"}
+                </span>
+              </button>
+
+              {showReasoning && (
+                <>
+                  <EncounterInsights
+                    messages={messages}
+                    reasoning={reasoning}
+                    assessment={assessment}
+                  />
+                  <ClinicalSummary messages={messages} />
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Non-verbal answer options */}
+          {nonVerbal && answerOptions.length > 0 && !busy && !assessment && (
+            <div className="mt-3 msg-enter">
+              {currentQuestion && (
+                <p className="text-[12px] font-bold text-purple-600 mb-2 px-1 uppercase tracking-wider">Tap your answer:</p>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                {answerOptions.map((opt, i) => (
+                  <button
+                    key={`${opt.label}-${i}`}
+                    onClick={() => tapOption(opt)}
+                    disabled={busy}
+                    className="flex items-center gap-2.5 px-3.5 py-3.5 bg-white hover:bg-purple-50 border-2 border-purple-200/80 hover:border-purple-400 rounded-2xl text-left transition-all disabled:opacity-40 min-h-[52px] active:scale-[0.97] active:bg-purple-100"
+                  >
+                    <span className="text-[20px] shrink-0">{opt.emoji}</span>
+                    <span className="text-[13px] font-semibold text-slate-700 leading-tight">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Busy indicator */}
           {busy && (
@@ -316,7 +656,7 @@ export default function Home() {
                   <div key={i} className="w-[7px] h-[7px] bg-primary-400 rounded-full" style={{ animation: `dot-bounce 1.4s infinite ease-in-out both`, animationDelay: `${i*0.16}s` }} />
                 ))}
               </div>
-              <span className="text-[13px] font-medium text-slate-400">Translating...</span>
+              <span className="text-[13px] font-medium text-slate-400">{interviewLoading ? "Updating clinical review..." : "Translating..."}</span>
             </div>
           )}
 
@@ -342,6 +682,20 @@ export default function Home() {
         </div>
       )}
 
+      {/* ═══ SIDE TOGGLE ═══ */}
+      <div className="bg-white/90 backdrop-blur-sm border-t border-slate-100 shrink-0">
+        <div className="max-w-lg mx-auto px-3 py-1.5 flex items-center gap-1">
+          <button onClick={() => setActiveSide("patient")}
+            className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all ${activeSide === "patient" ? "bg-primary-100 text-primary-700" : "text-slate-400"}`}>
+            {pL?.flag} Patient speaks
+          </button>
+          <button onClick={() => setActiveSide("provider")}
+            className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all ${activeSide === "provider" ? "bg-emerald-100 text-emerald-700" : "text-slate-400"}`}>
+            {dL?.flag} Provider speaks
+          </button>
+        </div>
+      </div>
+
       {/* ═══ INPUT BAR ═══ */}
       <div className="bg-white/80 backdrop-blur-xl border-t border-slate-200/60 shrink-0 safe-bottom">
         <div className="max-w-lg mx-auto px-2 sm:px-3 py-2 flex items-end gap-1.5 sm:gap-2">
@@ -354,9 +708,9 @@ export default function Home() {
           <div className="flex-1 min-w-0">
             <input type="text" value={text} onChange={e => setText(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !busy) sendText(); }}
-              placeholder={`Type in ${pL?.label || "your language"}...`}
+              placeholder={activeSide === "patient" ? `Type in ${pL?.label || "patient language"}...` : `Type in ${dL?.label || "provider language"}...`}
               disabled={busy || recording}
-              dir={pL?.dir === "rtl" ? "rtl" : "ltr"}
+              dir={(activeSide === "patient" ? pL?.dir : dL?.dir) === "rtl" ? "rtl" : "ltr"}
               className="w-full px-3 sm:px-4 py-2.5 bg-slate-100 focus:bg-white rounded-2xl outline-none focus:ring-2 focus:ring-primary-200 disabled:opacity-40 placeholder:text-slate-400 transition-all min-h-[42px] text-[15px]" />
           </div>
 

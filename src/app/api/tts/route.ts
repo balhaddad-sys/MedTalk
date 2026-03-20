@@ -3,11 +3,62 @@ import { getOpenAI } from "@/lib/openai";
 import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
 
 const MAX_TEXT_LENGTH = 4096;
-const VALID_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+type Voice = "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer";
+const VALID_VOICES: Voice[] = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+
+// Best voice per language family for consistent, natural-sounding output.
+// "nova" is the most natural female voice for most languages.
+// "onyx" is the best male voice for Arabic/Urdu/Farsi (deeper, clearer for RTL).
+// "shimmer" works well for East Asian languages.
+const VOICE_MAP: Record<string, Voice> = {
+  ar: "onyx",    // Arabic — deeper voice, clearer for formal MSA
+  ur: "onyx",    // Urdu
+  fa: "onyx",    // Farsi
+  he: "onyx",    // Hebrew
+  ku: "onyx",    // Kurdish
+  hi: "nova",    // Hindi
+  bn: "nova",    // Bengali
+  ta: "nova",    // Tamil
+  te: "nova",    // Telugu
+  ml: "nova",    // Malayalam
+  ne: "nova",    // Nepali
+  si: "nova",    // Sinhala
+  en: "nova",    // English
+  es: "nova",    // Spanish
+  fr: "nova",    // French
+  de: "alloy",   // German
+  it: "nova",    // Italian
+  pt: "nova",    // Portuguese
+  ru: "nova",    // Russian
+  uk: "nova",    // Ukrainian
+  pl: "nova",    // Polish
+  tr: "nova",    // Turkish
+  zh: "shimmer", // Chinese (Simplified)
+  "zh-TW": "shimmer", // Chinese (Traditional)
+  ja: "shimmer", // Japanese
+  ko: "shimmer", // Korean
+  vi: "nova",    // Vietnamese
+  th: "nova",    // Thai
+  tl: "nova",    // Filipino
+  so: "echo",    // Somali
+  sw: "echo",    // Swahili
+  am: "echo",    // Amharic
+  my: "nova",    // Burmese
+  ht: "nova",    // Haitian Creole
+};
+
+function pickVoice(lang?: string, requestedVoice?: string): Voice {
+  if (requestedVoice && VALID_VOICES.includes(requestedVoice as Voice)) {
+    return requestedVoice as Voice;
+  }
+  if (lang) {
+    return VOICE_MAP[lang] || VOICE_MAP[lang.split("-")[0]] || "nova";
+  }
+  return "nova";
+}
 
 export async function POST(request: NextRequest) {
   try {
-    // Rate limiting
     const ip = getClientIp(request);
     const { allowed, retryAfter } = checkRateLimit(ip, "tts");
     if (!allowed) {
@@ -17,7 +68,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { text, voice = "nova" } = await request.json();
+    const { text, voice, lang } = await request.json();
 
     if (!text || typeof text !== "string") {
       return NextResponse.json(
@@ -33,15 +84,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate voice parameter
-    const selectedVoice = VALID_VOICES.includes(voice) ? voice : "nova";
+    const selectedVoice = pickVoice(lang, voice);
 
     const openai = getOpenAI();
     const response = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: selectedVoice as "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer",
+      model: "tts-1-hd",
+      voice: selectedVoice,
       input: text,
       response_format: "mp3",
+      speed: 0.92, // slower for medical clarity and articulation
     });
 
     const audioBuffer = Buffer.from(await response.arrayBuffer());

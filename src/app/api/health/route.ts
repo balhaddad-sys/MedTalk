@@ -8,9 +8,14 @@ export async function GET() {
       openai: !!process.env.OPENAI_API_KEY,
       gemini: !!process.env.GEMINI_API_KEY,
     },
+    engines: {
+      translation: "openai",
+      interview: "openai",
+      summarize: "openai",
+    },
   };
 
-  const allGood = checks.env.openai && checks.env.gemini;
+  const allGood = checks.env.openai;
 
   return NextResponse.json(checks, {
     status: allGood ? 200 : 503,

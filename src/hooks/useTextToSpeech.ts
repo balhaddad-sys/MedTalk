@@ -18,7 +18,7 @@ export function useTextToSpeech() {
   }, []);
 
   const speak = useCallback(
-    async (text: string): Promise<string> => {
+    async (text: string, lang?: string): Promise<string> => {
       setError(null);
       stop();
       setIsLoading(true);
@@ -27,7 +27,7 @@ export function useTextToSpeech() {
         const response = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, lang }),
         });
 
         if (!response.ok) {

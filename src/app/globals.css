@@ -32,16 +32,19 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-html {
-  scroll-behavior: smooth;
+html, body {
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI",
     Roboto, Helvetica, Arial, sans-serif;
-  background: #f8fafc;
+  background:
+    radial-gradient(circle at top left, rgba(99, 102, 241, 0.14), transparent 26%),
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.1), transparent 22%),
+    linear-gradient(180deg, #f8fbff 0%, #f7fafc 45%, #eef4ff 100%);
   color: #0f172a;
-  min-height: 100dvh;
   -webkit-text-size-adjust: 100%;
   overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;

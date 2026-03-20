@@ -35,11 +35,9 @@ export function useAudioRecorder() {
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          channelCount: 1,           // mono — better for speech
-          sampleRate: 16000,         // 16kHz is Whisper's native rate
           echoCancellation: true,
-          noiseSuppression: true,    // reduce background noise
-          autoGainControl: true,     // normalize volume levels
+          noiseSuppression: true,
+          autoGainControl: true,
         },
       });
       streamRef.current = stream;

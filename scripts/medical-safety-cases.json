@@ -1,0 +1,77 @@
+{
+  "translationCases": [
+    {
+      "id": "water-low-risk",
+      "language": "en",
+      "text": "I need water please.",
+      "expectEscalation": false
+    },
+    {
+      "id": "english-dose-and-allergy",
+      "language": "en",
+      "text": "I take amoxicillin 500mg twice daily and I am allergic to penicillin.",
+      "expectEscalation": true,
+      "expectedNoteKeywords": ["medication", "doses"]
+    },
+    {
+      "id": "arabic-chest-pain",
+      "language": "ar",
+      "text": "عندي ألم في الصدر ودوخة من ساعة",
+      "expectEscalation": true
+    },
+    {
+      "id": "spanish-insulin-time",
+      "language": "es",
+      "text": "Me puse 12 unidades de insulina a las 7 pm.",
+      "expectEscalation": true
+    },
+    {
+      "id": "hindi-pregnancy-bleeding",
+      "language": "hi",
+      "text": "मुझे गर्भावस्था में खून आ रहा है।",
+      "expectEscalation": true
+    },
+    {
+      "id": "english-negation-location",
+      "language": "en",
+      "text": "I have no pain on the right side, only the left arm feels numb.",
+      "expectEscalation": true,
+      "expectedDetailKeywords": ["left arm", "no pain"]
+    }
+  ],
+  "speechCases": [
+    {
+      "id": "high-confidence-medication",
+      "expectedConfidence": "high",
+      "logprobs": [
+        { "token": "I", "logprob": -0.1 },
+        { "token": "take", "logprob": -0.1 },
+        { "token": "insulin", "logprob": -0.12 },
+        { "token": "10", "logprob": -0.18 },
+        { "token": "units", "logprob": -0.12 }
+      ]
+    },
+    {
+      "id": "medium-confidence-noisy",
+      "expectedConfidence": "medium",
+      "logprobs": [
+        { "token": "I", "logprob": -0.2 },
+        { "token": "think", "logprob": -0.35 },
+        { "token": "amoxicillin", "logprob": -0.95 },
+        { "token": "500", "logprob": -0.8 },
+        { "token": "milligrams", "logprob": -0.85 }
+      ]
+    },
+    {
+      "id": "low-confidence-critical",
+      "expectedConfidence": "low",
+      "logprobs": [
+        { "token": "insulin", "logprob": -1.4 },
+        { "token": "fifty", "logprob": -1.5 },
+        { "token": "units", "logprob": -1.3 },
+        { "token": "left", "logprob": -1.6 },
+        { "token": "arm", "logprob": -1.4 }
+      ]
+    }
+  ]
+}

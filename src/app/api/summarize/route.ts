@@ -15,6 +15,7 @@ interface SummaryMessage {
   criticalDetails?: unknown;
   speechConfidence?: unknown;
   speechReviewItems?: unknown;
+  reviewStatus?: unknown;
 }
 
 interface SummaryModelOutput {
@@ -30,7 +31,7 @@ interface SummaryModelOutput {
 const SUMMARY_PROMPT = `You are a clinical documentation assistant preparing a draft note from a bilingual patient-provider conversation.
 
 Use only facts stated in the conversation. Do not invent findings, diagnoses, vitals, or exam details. Keep the output concise and chart-friendly.
-If a message is marked medium or low confidence, requires human review, or has voice-review warnings, treat it as unverified. Put those concerns in follow_up_needed or verification_checklist instead of stating them as certain facts.
+If a message is marked medium or low confidence, requires human review, or has voice-review warnings, treat it as unverified unless reviewStatus is "confirmed". Put unresolved concerns in follow_up_needed or verification_checklist instead of stating them as certain facts.
 
 Return JSON only with this exact shape:
 {
@@ -118,6 +119,8 @@ export async function POST(request: NextRequest) {
         const speechReviewItems = Array.isArray(message.speechReviewItems)
           ? message.speechReviewItems.filter((item): item is string => typeof item === "string").slice(0, 3)
           : [];
+        const reviewStatus =
+          typeof message.reviewStatus === "string" ? message.reviewStatus : "";
 
         return [
           `[${index + 1}] ${role}`,
@@ -130,6 +133,7 @@ export async function POST(request: NextRequest) {
           possibleMismatches.length ? `Possible mismatches: ${possibleMismatches.join(" | ")}` : "",
           speechConfidence ? `Voice confidence: ${speechConfidence}` : "",
           speechReviewItems.length ? `Voice review items: ${speechReviewItems.join(" | ")}` : "",
+          reviewStatus ? `Review status: ${reviewStatus}` : "",
         ]
           .filter(Boolean)
           .join("\n");

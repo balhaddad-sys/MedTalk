@@ -1,5 +1,3 @@
-import { ConfidenceLevel } from "../types";
-
 const HIGH_RISK_PATTERNS = [
   /\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|g|kg|lb|ml|mL|l|L|mmhg|mmol|meq|units?|drops?|tablets?|capsules?)\b/i,
   /\b(?:every|once|twice|daily|hourly|hours|days|weeks|months|years|since|for)\b/i,
@@ -8,7 +6,10 @@ const HIGH_RISK_PATTERNS = [
   /\b(?:pregnan|bleeding|chest pain|short(?:ness)? of breath|can't breathe|cannot breathe|faint|passed out|seizure|stroke|suicid|overdose|anaphyl|allergic reaction)\b/i,
   /\b(?:no|not|denies|without|none|never)\b/i,
   /\b(?:today|yesterday|tomorrow|\d{1,2}:\d{2}\s?(?:am|pm)?)\b/i,
-] as const;
+  /(?:ألم|الصدر|تنفس|دوخة|حساسية|أنسولين|بنسلين|نزيف|حامل|طارئة)/i,
+  /(?:insulina|unidades|pecho|respirar|alergia|sangrado|embarazo)/i,
+  /(?:गर्भावस्था|खून|सांस|सीने|एलर्जी|इंसुलिन)/i,
+];
 
 const DETAIL_PATTERNS = [
   /\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|g|kg|lb|ml|mL|l|L|mmHg|mmol|mEq|units?|drops?|tablets?|capsules?)\b/gi,
@@ -16,31 +17,31 @@ const DETAIL_PATTERNS = [
   /\b(?:no|denies|without)\s+[^,.;]{1,40}/gi,
   /\b(?:today|yesterday|tomorrow|\d{1,2}:\d{2}\s?(?:am|pm)?|\d{1,2}\s?(?:am|pm)|for \d+\s+(?:day|days|week|weeks|month|months|year|years))\b/gi,
   /\b(?:penicillin|insulin|warfarin|aspirin|ibuprofen|acetaminophen|paracetamol|amoxicillin|metformin|prednisone)\b/gi,
-] as const;
+];
 
-function dedupe(items: string[], limit = 8): string[] {
+function dedupe(items, limit = 8) {
   return Array.from(
     new Set(items.map((item) => item.trim()).filter(Boolean))
   ).slice(0, limit);
 }
 
-function looksAscii(text: string): boolean {
+function looksAscii(text) {
   return /^[\x00-\x7F\s]*$/.test(text);
 }
 
-function cleanToken(token: string): string {
+function cleanToken(token) {
   return token
     .trim()
     .replace(/^[^0-9A-Za-z]+|[^0-9A-Za-z]+$/g, "")
     .trim();
 }
 
-export function shouldEscalateMedicalVerification(text: string): boolean {
+export function shouldEscalateMedicalVerification(text) {
   return HIGH_RISK_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-export function extractCriticalDetails(text: string, limit = 8): string[] {
-  const matches: string[] = [];
+export function extractCriticalDetails(text, limit = 8) {
+  const matches = [];
 
   for (const pattern of DETAIL_PATTERNS) {
     const found = text.match(pattern);
@@ -53,11 +54,11 @@ export function extractCriticalDetails(text: string, limit = 8): string[] {
 }
 
 export function buildMedicalVerificationNotes(
-  text: string,
-  confidence: ConfidenceLevel = "medium",
-  suspectTerms: string[] = []
-): string[] {
-  const notes: string[] = [];
+  text,
+  confidence = "medium",
+  suspectTerms = []
+) {
+  const notes = [];
 
   if (/\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|g|kg|lb|ml|mL|l|L|mmhg|mmol|meq|units?)\b/i.test(text)) {
     notes.push("Confirm numbers, doses, units, and frequencies before acting.");
@@ -90,7 +91,7 @@ export function buildMedicalVerificationNotes(
   return dedupe(notes, 6);
 }
 
-export function normalizeTextForSpeech(text: string): string {
+export function normalizeTextForSpeech(text) {
   let normalized = text
     .replace(/(\d)([A-Za-z])/g, "$1 $2")
     .replace(/([A-Za-z])(\d)/g, "$1 $2")
@@ -113,7 +114,7 @@ export function normalizeTextForSpeech(text: string): string {
   return normalized;
 }
 
-export function buildTtsInstructions(text: string): string {
+export function buildTtsInstructions(text) {
   const highRisk = shouldEscalateMedicalVerification(text);
 
   if (highRisk) {
@@ -134,16 +135,9 @@ export function buildTtsInstructions(text: string): string {
   ].join(" ");
 }
 
-export function summarizeTranscriptionLogprobs(
-  logprobs?: Array<{ token?: string; logprob?: number }>
-): {
-  confidence: ConfidenceLevel;
-  lowConfidenceTerms: string[];
-  averageLogprob: number | null;
-} {
-  const usable = (logprobs ?? []).filter(
-    (entry): entry is { token?: string; logprob: number } =>
-      typeof entry.logprob === "number" && Number.isFinite(entry.logprob)
+export function summarizeTranscriptionLogprobs(logprobs = []) {
+  const usable = logprobs.filter(
+    (entry) => typeof entry.logprob === "number" && Number.isFinite(entry.logprob)
   );
 
   if (usable.length === 0) {
@@ -165,7 +159,7 @@ export function summarizeTranscriptionLogprobs(
   );
   const lowRatio = lowConfidenceTerms.length / Math.max(usable.length, 1);
 
-  let confidence: ConfidenceLevel = "low";
+  let confidence = "low";
   if (averageLogprob >= -0.35 && lowRatio <= 0.08) {
     confidence = "high";
   } else if (averageLogprob >= -0.9 && lowRatio <= 0.2) {

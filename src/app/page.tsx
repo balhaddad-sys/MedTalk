@@ -221,12 +221,14 @@ export default function Home() {
         speechConfidence: metadata?.speechConfidence,
         speechReviewItems: metadata?.speechReviewItems,
         inputMode: metadata?.inputMode,
+        reviewStatus: r.requires_human_review ? "pending" : undefined,
       };
-      setMessages(p => [...p, m]);
 
       const shouldUseForInterview =
         role !== "patient" ||
         (!r.requires_human_review && metadata?.speechConfidence !== "low");
+      m.includedInInterviewHistory = shouldUseForInterview;
+      setMessages(p => [...p, m]);
       if (shouldUseForInterview) {
         const clinicalText = role === "patient" ? r.translated_text : txt;
         interviewHistoryRef.current = [...interviewHistoryRef.current, { role, text: clinicalText }];
@@ -278,6 +280,8 @@ export default function Home() {
       possibleMismatches: trResult.possible_mismatches,
       requiresHumanReview: trResult.requires_human_review,
       inputMode: "text",
+      reviewStatus: trResult.requires_human_review ? "pending" : undefined,
+      includedInInterviewHistory: true,
     };
     setMessages(p => [...p, providerMsg]);
     // Fire-and-forget TTS — don't block the UI
@@ -300,6 +304,10 @@ export default function Home() {
   ) => {
     const r = await send(txt, from, to, role, metadata);
     if (!r || !autoInterview || !isOnline || role !== "patient" || assessment) return;
+    if (pendingPatientReview) {
+      setError("Confirm or reject the pending patient review before the interview continues.");
+      return;
+    }
     if (metadata?.speechConfidence === "low" || r.requires_human_review) {
       setError("High-risk voice or translation details need human confirmation before the interview continues.");
       return;
@@ -310,7 +318,7 @@ export default function Home() {
     askFollowUp(history)
       .then(followUp => handleFollowUp(followUp, from))
       .catch(() => {});
-  }, [send, autoInterview, isOnline, assessment, askFollowUp, handleFollowUp]);
+  }, [send, autoInterview, isOnline, assessment, pendingPatientReview, askFollowUp, handleFollowUp]);
 
   const processBlob = useCallback(async (blob: Blob) => {
     setError(null);
@@ -366,7 +374,7 @@ export default function Home() {
   const phrase = useCallback(async (t: string) => {
     setSheet(null); rec.setRecordingState("processing");
     const r = await send(t, "en", providerLang, "patient", { inputMode: "phrase" });
-    if (r && autoInterview && isOnline && !assessment && !r.requires_human_review) {
+    if (r && autoInterview && isOnline && !assessment && !pendingPatientReview && !r.requires_human_review) {
       try {
         const followUp = await askFollowUp(interviewHistoryRef.current);
         await handleFollowUp(followUp, patientLang);
@@ -375,7 +383,7 @@ export default function Home() {
       setError("Confirm this translated phrase before the interview continues.");
     }
     rec.setRecordingState("idle");
-  }, [providerLang, patientLang, send, autoInterview, isOnline, assessment, askFollowUp, handleFollowUp, rec]);
+  }, [providerLang, patientLang, send, autoInterview, isOnline, assessment, pendingPatientReview, askFollowUp, handleFollowUp, rec]);
 
   const play = useCallback(async (m: Message) => {
     if (playingId === m.id) { tts.stop(); setPlayingId(null); return; }
@@ -397,6 +405,51 @@ export default function Home() {
     }
     setPlayingId(null);
   }, [playingId, tts]);
+
+  const resolveReview = useCallback(async (messageId: string, resolution: "confirmed" | "rejected") => {
+    const target = messages.find((message) => message.id === messageId);
+    if (!target) return;
+
+    const shouldResumeInterview =
+      resolution === "confirmed" &&
+      target.role === "patient" &&
+      !target.includedInInterviewHistory;
+
+    setMessages((current) =>
+      current.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              requiresHumanReview: false,
+              reviewStatus: resolution,
+              includedInInterviewHistory:
+                resolution === "confirmed"
+                  ? true
+                  : message.includedInInterviewHistory,
+            }
+          : message
+      )
+    );
+
+    if (resolution === "rejected") {
+      setError("Repeat or type a corrected version before using this clinically.");
+      return;
+    }
+
+    if (shouldResumeInterview) {
+      interviewHistoryRef.current = [
+        ...interviewHistoryRef.current,
+        { role: "patient", text: target.translatedText },
+      ];
+
+      if (autoInterview && isOnline && !assessment) {
+        try {
+          const followUp = await askFollowUp([...interviewHistoryRef.current]);
+          await handleFollowUp(followUp, target.sourceLang);
+        } catch {}
+      }
+    }
+  }, [messages, autoInterview, isOnline, assessment, askFollowUp, handleFollowUp]);
 
   const swap = useCallback(() => { setPatientLang(providerLang); setProviderLang(patientLang); }, [patientLang, providerLang]);
   const clearAll = useCallback(() => {
@@ -460,6 +513,8 @@ export default function Home() {
         possibleMismatches: r.possible_mismatches,
         requiresHumanReview: r.requires_human_review,
         inputMode: "phrase",
+        reviewStatus: r.requires_human_review ? "pending" : undefined,
+        includedInInterviewHistory: true,
       };
       setMessages(p => [...p, m]);
     } catch {
@@ -472,7 +527,7 @@ export default function Home() {
       setMessages(p => [...p, m]);
     }
     // Get next AI question
-    if (isOnline && !requiresReview) {
+    if (isOnline && !pendingPatientReview && !requiresReview) {
       try {
         const followUp = await askFollowUp(interviewHistoryRef.current);
         await handleFollowUp(followUp, patientLang);
@@ -481,7 +536,7 @@ export default function Home() {
       setError("Confirm this translated answer before the interview continues.");
     }
     rec.setRecordingState("idle");
-  }, [busy, assessment, rec, tr, providerLang, patientLang, isOnline, askFollowUp, handleFollowUp]);
+  }, [busy, assessment, rec, tr, providerLang, patientLang, isOnline, pendingPatientReview, askFollowUp, handleFollowUp]);
 
   // Non-verbal: start interview by asking opening question
   const startNonVerbalInterview = useCallback(async () => {
@@ -760,6 +815,12 @@ export default function Home() {
             </div>
           )}
 
+          {pendingPatientReview && (
+            <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+              Confirm or reject the pending patient review before the AI interview continues.
+            </div>
+          )}
+
           {/* Messages */}
           <div className="space-y-3">
             {messages.map(m => {
@@ -837,6 +898,16 @@ export default function Home() {
                           {getTranslationSourceLabel(m.translationSource)}
                         </span>
                       )}
+                      {m.reviewStatus === "confirmed" && (
+                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
+                          Review confirmed
+                        </span>
+                      )}
+                      {m.reviewStatus === "rejected" && (
+                        <span className="rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-bold text-slate-700">
+                          Re-entry needed
+                        </span>
+                      )}
                       {(m.criticalDetails ?? []).slice(0, 3).map((detail) => (
                         <span
                           key={`${m.id}-detail-${detail}`}
@@ -886,6 +957,22 @@ export default function Home() {
                             Possible mismatch: {item}
                           </p>
                         ))}
+                        {m.reviewStatus === "pending" && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                              onClick={() => resolveReview(m.id, "confirmed")}
+                              className="rounded-full bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white"
+                            >
+                              Confirm and continue
+                            </button>
+                            <button
+                              onClick={() => resolveReview(m.id, "rejected")}
+                              className="rounded-full bg-white px-3 py-1.5 text-[11px] font-bold text-orange-800 border border-orange-200"
+                            >
+                              Needs repeat
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

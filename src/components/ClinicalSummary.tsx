@@ -73,6 +73,7 @@ export default function ClinicalSummary({ messages }: ClinicalSummaryProps) {
             criticalDetails: message.criticalDetails,
             speechConfidence: message.speechConfidence,
             speechReviewItems: message.speechReviewItems,
+            reviewStatus: message.reviewStatus,
           })),
         }),
       });

@@ -1,6 +1,10 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import {
+  normalizeTextForSpeech,
+  shouldEscalateMedicalVerification,
+} from "@/lib/medicalSafety";
 
 const SPEECH_LANG_MAP: Record<string, string> = {
   ar: "ar-SA",
@@ -22,7 +26,7 @@ const SPEECH_LANG_MAP: Record<string, string> = {
   "zh-TW": "zh-TW",
 };
 
-// Languages where OpenAI TTS-1-HD sounds better than browser voices
+// Languages where OpenAI TTS sounds better than browser voices
 const PREFER_OPENAI: Set<string> = new Set(["en"]);
 
 function getSpeechLangTag(lang?: string): string {
@@ -69,11 +73,12 @@ export function useTextToSpeech() {
 
       return new Promise<string>((resolve, reject) => {
         stop();
-        const utterance = new SpeechSynthesisUtterance(text);
+        const normalizedText = normalizeTextForSpeech(text);
+        const utterance = new SpeechSynthesisUtterance(normalizedText);
         const synth = window.speechSynthesis;
         const langTag = getSpeechLangTag(lang);
         utterance.lang = langTag;
-        utterance.rate = 0.95; // Slightly slower for medical clarity
+        utterance.rate = shouldEscalateMedicalVerification(text) ? 0.88 : 0.93;
 
         const voices = synth.getVoices();
         // Prefer higher-quality voices (often labeled "Enhanced", "Premium", or not "compact")
@@ -121,10 +126,11 @@ export function useTextToSpeech() {
 
   const speakWithOpenAI = useCallback(
     async (text: string, lang?: string): Promise<string> => {
+      const normalizedText = normalizeTextForSpeech(text);
       const response = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, lang }),
+        body: JSON.stringify({ text: normalizedText, lang }),
       });
 
       if (!response.ok) {
@@ -169,7 +175,7 @@ export function useTextToSpeech() {
 
       try {
         // Strategy: use browser native for non-English (better accents, instant),
-        // OpenAI HD for English (more natural). Fallback to the other if primary fails.
+        // OpenAI TTS for English (more natural). Fallback to the other if primary fails.
         if (useOpenAIPrimary) {
           return await speakWithOpenAI(text, lang);
         }

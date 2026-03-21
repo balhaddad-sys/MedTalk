@@ -1,13 +1,17 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { SpeechToTextResponse } from "@/types";
 
 export function useSpeechToText() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const transcribe = useCallback(
-    async (audioBlob: Blob, languageHint?: string): Promise<string> => {
+    async (
+      audioBlob: Blob,
+      languageHint?: string
+    ): Promise<SpeechToTextResponse> => {
       setIsLoading(true);
       setError(null);
 
@@ -42,8 +46,8 @@ export function useSpeechToText() {
           throw new Error(data.error || "Transcription failed");
         }
 
-        const data = await response.json();
-        return data.text;
+        const data = (await response.json()) as SpeechToTextResponse;
+        return data;
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Could not transcribe audio";

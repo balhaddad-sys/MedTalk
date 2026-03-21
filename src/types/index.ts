@@ -16,6 +16,7 @@ export type CoverageStatus = "done" | "partial" | "missing" | "not_applicable";
 export type DifferentialLikelihood = ConfidenceLevel | "excluded";
 export type DifferentialUrgency = "critical" | "urgent" | "routine";
 export type ProtocolScreeningStatus = "addressed" | "missing";
+export type ReviewStatus = "pending" | "confirmed" | "rejected";
 
 export interface Message {
   id: string;
@@ -32,6 +33,15 @@ export interface Message {
   isEmergency?: boolean;
   edited?: boolean;
   translationSource?: TranslationSource;
+  criticalDetails?: string[];
+  verificationItems?: string[];
+  possibleMismatches?: string[];
+  requiresHumanReview?: boolean;
+  speechConfidence?: ConfidenceLevel;
+  speechReviewItems?: string[];
+  inputMode?: "voice" | "text" | "phrase";
+  reviewStatus?: ReviewStatus;
+  includedInInterviewHistory?: boolean;
 }
 
 export interface TranslateRequest {
@@ -50,6 +60,18 @@ export interface TranslateResponse {
   is_emergency?: boolean;
   model: string;
   translation_source?: TranslationSource;
+  critical_details?: string[];
+  verification_items?: string[];
+  possible_mismatches?: string[];
+  requires_human_review?: boolean;
+}
+
+export interface SpeechToTextResponse {
+  text: string;
+  confidence: ConfidenceLevel;
+  low_confidence_terms: string[];
+  review_items: string[];
+  model: string;
 }
 
 export type RecordingState = "idle" | "recording" | "processing";

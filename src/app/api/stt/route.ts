@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOpenAI } from "@/lib/openai";
 import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
+import {
+  buildMedicalVerificationNotes,
+  summarizeTranscriptionLogprobs,
+} from "@/lib/medicalSafety";
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB (Whisper limit)
 
@@ -96,14 +100,37 @@ export async function POST(request: NextRequest) {
     const baseLang = whisperLang || (languageHint?.split("-")[0] ?? "");
     const vocabPrompt = MEDICAL_PROMPTS[baseLang] || undefined;
 
+    const prompt =
+      baseLang === "en"
+        ? `Medical encounter. Preserve exact drug names, numbers, dosages, units, timing, laterality, and negations. ${vocabPrompt ?? ""}`.trim()
+        : vocabPrompt;
+
     const transcription = await openai.audio.transcriptions.create({
-      model: "whisper-1",
+      model: "gpt-4o-transcribe",
       file: whisperFile,
-      ...(vocabPrompt ? { prompt: vocabPrompt } : {}),
+      ...(prompt ? { prompt } : {}),
       ...(whisperLang ? { language: whisperLang } : {}),
+      include: ["logprobs"],
+      temperature: 0,
     });
 
-    return NextResponse.json({ text: transcription.text });
+    const quality = summarizeTranscriptionLogprobs(transcription.logprobs);
+    const reviewItems =
+      quality.confidence === "high"
+        ? []
+        : buildMedicalVerificationNotes(
+            transcription.text,
+            quality.confidence,
+            quality.lowConfidenceTerms
+          );
+
+    return NextResponse.json({
+      text: transcription.text,
+      confidence: quality.confidence,
+      low_confidence_terms: quality.lowConfidenceTerms,
+      review_items: reviewItems,
+      model: "gpt-4o-transcribe",
+    });
   } catch (error: unknown) {
     console.error("STT error:", error);
     const message =

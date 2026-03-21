@@ -8,6 +8,13 @@ interface SummaryMessage {
   role?: unknown;
   originalText?: unknown;
   translatedText?: unknown;
+  confidence?: unknown;
+  requiresHumanReview?: unknown;
+  verificationItems?: unknown;
+  possibleMismatches?: unknown;
+  criticalDetails?: unknown;
+  speechConfidence?: unknown;
+  speechReviewItems?: unknown;
 }
 
 interface SummaryModelOutput {
@@ -23,6 +30,7 @@ interface SummaryModelOutput {
 const SUMMARY_PROMPT = `You are a clinical documentation assistant preparing a draft note from a bilingual patient-provider conversation.
 
 Use only facts stated in the conversation. Do not invent findings, diagnoses, vitals, or exam details. Keep the output concise and chart-friendly.
+If a message is marked medium or low confidence, requires human review, or has voice-review warnings, treat it as unverified. Put those concerns in follow_up_needed or verification_checklist instead of stating them as certain facts.
 
 Return JSON only with this exact shape:
 {
@@ -93,10 +101,35 @@ export async function POST(request: NextRequest) {
         const originalText = asString(message.originalText);
         const translatedText = asString(message.translatedText);
 
+        const confidence =
+          typeof message.confidence === "string" ? message.confidence : "";
+        const requiresHumanReview = message.requiresHumanReview === true;
+        const verificationItems = Array.isArray(message.verificationItems)
+          ? message.verificationItems.filter((item): item is string => typeof item === "string").slice(0, 4)
+          : [];
+        const possibleMismatches = Array.isArray(message.possibleMismatches)
+          ? message.possibleMismatches.filter((item): item is string => typeof item === "string").slice(0, 3)
+          : [];
+        const criticalDetails = Array.isArray(message.criticalDetails)
+          ? message.criticalDetails.filter((item): item is string => typeof item === "string").slice(0, 6)
+          : [];
+        const speechConfidence =
+          typeof message.speechConfidence === "string" ? message.speechConfidence : "";
+        const speechReviewItems = Array.isArray(message.speechReviewItems)
+          ? message.speechReviewItems.filter((item): item is string => typeof item === "string").slice(0, 3)
+          : [];
+
         return [
           `[${index + 1}] ${role}`,
           originalText ? `Original: ${originalText}` : "",
           translatedText ? `Provider translation: ${translatedText}` : "",
+          confidence ? `Translation confidence: ${confidence}` : "",
+          requiresHumanReview ? "Translation review flag: human confirmation required" : "",
+          criticalDetails.length ? `Critical details: ${criticalDetails.join(" | ")}` : "",
+          verificationItems.length ? `Verification items: ${verificationItems.join(" | ")}` : "",
+          possibleMismatches.length ? `Possible mismatches: ${possibleMismatches.join(" | ")}` : "",
+          speechConfidence ? `Voice confidence: ${speechConfidence}` : "",
+          speechReviewItems.length ? `Voice review items: ${speechReviewItems.join(" | ")}` : "",
         ]
           .filter(Boolean)
           .join("\n");

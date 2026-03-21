@@ -1,10 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOpenAI } from "@/lib/openai";
 import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
+import {
+  buildTtsInstructions,
+  normalizeTextForSpeech,
+  shouldEscalateMedicalVerification,
+} from "@/lib/medicalSafety";
 
 const MAX_TEXT_LENGTH = 4096;
-type Voice = "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer";
-const VALID_VOICES: Voice[] = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+type Voice =
+  | "alloy"
+  | "ash"
+  | "ballad"
+  | "coral"
+  | "echo"
+  | "fable"
+  | "onyx"
+  | "nova"
+  | "sage"
+  | "shimmer";
+const VALID_VOICES: Voice[] = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"];
 
 // Best voice per language family for consistent, natural-sounding output.
 // "nova" is the most natural female voice for most languages.
@@ -23,16 +38,16 @@ const VOICE_MAP: Record<string, Voice> = {
   ml: "nova",    // Malayalam
   ne: "nova",    // Nepali
   si: "nova",    // Sinhala
-  en: "nova",    // English
-  es: "nova",    // Spanish
-  fr: "nova",    // French
+  en: "sage",    // English
+  es: "sage",    // Spanish
+  fr: "sage",    // French
   de: "alloy",   // German
-  it: "nova",    // Italian
-  pt: "nova",    // Portuguese
+  it: "sage",    // Italian
+  pt: "sage",    // Portuguese
   ru: "nova",    // Russian
   uk: "nova",    // Ukrainian
   pl: "nova",    // Polish
-  tr: "nova",    // Turkish
+  tr: "sage",    // Turkish
   zh: "shimmer", // Chinese (Simplified)
   "zh-TW": "shimmer", // Chinese (Traditional)
   ja: "shimmer", // Japanese
@@ -52,9 +67,9 @@ function pickVoice(lang?: string, requestedVoice?: string): Voice {
     return requestedVoice as Voice;
   }
   if (lang) {
-    return VOICE_MAP[lang] || VOICE_MAP[lang.split("-")[0]] || "nova";
+    return VOICE_MAP[lang] || VOICE_MAP[lang.split("-")[0]] || "sage";
   }
-  return "nova";
+  return "sage";
 }
 
 export async function POST(request: NextRequest) {
@@ -85,14 +100,17 @@ export async function POST(request: NextRequest) {
     }
 
     const selectedVoice = pickVoice(lang, voice);
+    const normalizedText = normalizeTextForSpeech(text);
+    const highRisk = shouldEscalateMedicalVerification(text);
 
     const openai = getOpenAI();
     const response = await openai.audio.speech.create({
-      model: "tts-1-hd",
+      model: "gpt-4o-mini-tts",
       voice: selectedVoice,
-      input: text,
+      input: normalizedText,
+      instructions: buildTtsInstructions(text),
       response_format: "mp3",
-      speed: 1.0,
+      speed: highRisk ? 0.9 : 0.97,
     });
 
     const audioBuffer = Buffer.from(await response.arrayBuffer());
@@ -102,6 +120,7 @@ export async function POST(request: NextRequest) {
         "Content-Type": "audio/mpeg",
         "Content-Length": audioBuffer.length.toString(),
         "Cache-Control": "public, max-age=3600",
+        "X-Voice-Synthetic": "true",
       },
     });
   } catch (error: unknown) {

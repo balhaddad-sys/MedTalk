@@ -66,6 +66,13 @@ export default function ClinicalSummary({ messages }: ClinicalSummaryProps) {
             role: message.role,
             originalText: message.originalText,
             translatedText: message.translatedText,
+            confidence: message.confidence,
+            requiresHumanReview: message.requiresHumanReview,
+            verificationItems: message.verificationItems,
+            possibleMismatches: message.possibleMismatches,
+            criticalDetails: message.criticalDetails,
+            speechConfidence: message.speechConfidence,
+            speechReviewItems: message.speechReviewItems,
           })),
         }),
       });

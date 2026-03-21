@@ -8,6 +8,7 @@ import {
   ConfidenceLevel,
   InterviewResponse,
   Message,
+  SpeechToTextResponse,
   TranslateResponse,
 } from "@/types";
 import { loadEncounterState, saveEncounterState } from "@/lib/encounterStorage";
@@ -31,6 +32,12 @@ function getConfidenceLabel(c: ConfidenceLevel): string {
   return "Low confidence";
 }
 
+function getSpeechConfidenceLabel(c: ConfidenceLevel): string {
+  if (c === "high") return "Voice clear";
+  if (c === "medium") return "Voice review";
+  return "Voice risky";
+}
+
 function getTranslationSourceClasses(source?: Message["translationSource"]): string {
   if (source === "offline_phrasebook") return "bg-cyan-100 text-cyan-700";
   if (source === "offline_memory") return "bg-slate-200 text-slate-700";
@@ -52,6 +59,12 @@ function FeatureCard({ title, description }: { title: string; description: strin
       <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">{description}</p>
     </div>
   );
+}
+
+interface SendMetadata {
+  inputMode: "voice" | "text" | "phrase";
+  speechConfidence?: ConfidenceLevel;
+  speechReviewItems?: string[];
 }
 
 /* ─── Quick Phrases (mapped to offline phrasebook IDs for multilingual display) ─── */
@@ -109,6 +122,9 @@ export default function Home() {
   const emergencyDetected = messages.some((message) => message.isEmergency);
   const offlinePackReady = hasOfflinePackForPair(patientLang, providerLang);
   const aiOperational = autoInterview && isOnline;
+  const pendingPatientReview = messages.some(
+    (message) => message.role === "patient" && message.reviewStatus === "pending"
+  );
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages.length]);
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(null), 4000); return () => clearTimeout(t); }, [error]);
@@ -168,14 +184,20 @@ export default function Home() {
   }, []);
 
   /* ─── Actions ─── */
-  const send = useCallback(async (txt: string, from: string, to: string, role: "patient" | "provider") => {
+  const send = useCallback(async (
+    txt: string,
+    from: string,
+    to: string,
+    role: "patient" | "provider",
+    metadata?: SendMetadata
+  ) => {
     setError(null);
     try {
       const r: TranslateResponse = await tr.translate(
         txt,
         from,
         to,
-        role === "patient"
+        role === "patient" || metadata?.inputMode === "voice"
           ? { mode: "precision", includeVerification: true }
           : { mode: "fast", includeVerification: false }
       );
@@ -192,11 +214,23 @@ export default function Home() {
         timestamp: Date.now(),
         isEmergency: r.is_emergency,
         translationSource: r.translation_source,
+        criticalDetails: r.critical_details,
+        verificationItems: r.verification_items,
+        possibleMismatches: r.possible_mismatches,
+        requiresHumanReview: r.requires_human_review,
+        speechConfidence: metadata?.speechConfidence,
+        speechReviewItems: metadata?.speechReviewItems,
+        inputMode: metadata?.inputMode,
       };
       setMessages(p => [...p, m]);
 
-      const clinicalText = role === "patient" ? r.translated_text : txt;
-      interviewHistoryRef.current = [...interviewHistoryRef.current, { role, text: clinicalText }];
+      const shouldUseForInterview =
+        role !== "patient" ||
+        (!r.requires_human_review && metadata?.speechConfidence !== "low");
+      if (shouldUseForInterview) {
+        const clinicalText = role === "patient" ? r.translated_text : txt;
+        interviewHistoryRef.current = [...interviewHistoryRef.current, { role, text: clinicalText }];
+      }
 
       return r;
     } catch (err) {
@@ -225,29 +259,51 @@ export default function Home() {
       followUp.question,
       "en",
       targetPatientLang,
-      { mode: "fast", includeVerification: false }
+      { mode: "precision", includeVerification: true }
     );
     const msgId = (Date.now() + 1).toString();
     const providerMsg: Message = {
       id: msgId, role: "provider", originalText: followUp.question,
       translatedText: trResult.translated_text,
+      backTranslation: trResult.back_translation,
+      confidence: trResult.confidence,
+      medicalTerms: trResult.medical_terms,
       sourceLang: "en",
       targetLang: targetPatientLang,
       timestamp: Date.now(),
       isEmergency: trResult.is_emergency,
       translationSource: trResult.translation_source,
+      criticalDetails: trResult.critical_details,
+      verificationItems: trResult.verification_items,
+      possibleMismatches: trResult.possible_mismatches,
+      requiresHumanReview: trResult.requires_human_review,
+      inputMode: "text",
     };
     setMessages(p => [...p, providerMsg]);
     // Fire-and-forget TTS — don't block the UI
-    tts.speak(trResult.translated_text, targetPatientLang)
-      .then(audioUrl => { if (audioUrl) setMessages(p => p.map(x => x.id === msgId ? { ...x, audioUrl } : x)); })
-      .catch(() => {});
+    if (!trResult.requires_human_review) {
+      tts.speak(trResult.translated_text, targetPatientLang)
+        .then(audioUrl => { if (audioUrl) setMessages(p => p.map(x => x.id === msgId ? { ...x, audioUrl } : x)); })
+        .catch(() => {});
+    } else {
+      setError("Follow-up question needs review before voice playback.");
+    }
   }, [tr, tts]);
 
   // After patient speaks, auto-generate next clinical question (non-blocking)
-  const sendAndFollowUp = useCallback(async (txt: string, from: string, to: string, role: "patient" | "provider") => {
-    const r = await send(txt, from, to, role);
+  const sendAndFollowUp = useCallback(async (
+    txt: string,
+    from: string,
+    to: string,
+    role: "patient" | "provider",
+    metadata?: SendMetadata
+  ) => {
+    const r = await send(txt, from, to, role, metadata);
     if (!r || !autoInterview || !isOnline || role !== "patient" || assessment) return;
+    if (metadata?.speechConfidence === "low" || r.requires_human_review) {
+      setError("High-risk voice or translation details need human confirmation before the interview continues.");
+      return;
+    }
 
     // Fire interview in background — don't block UI
     const history = [...interviewHistoryRef.current];
@@ -259,12 +315,29 @@ export default function Home() {
   const processBlob = useCallback(async (blob: Blob) => {
     setError(null);
     try {
-      const t = await stt.transcribe(blob, activeSide === "patient" ? patientLang : providerLang);
-      if (!t.trim()) { rec.setRecordingState("idle"); setError("Couldn't hear you. Try again."); return; }
+      const t: SpeechToTextResponse = await stt.transcribe(
+        blob,
+        activeSide === "patient" ? patientLang : providerLang
+      );
+      if (!t.text.trim()) { rec.setRecordingState("idle"); setError("Couldn't hear you. Try again."); return; }
+      if (t.confidence !== "high") {
+        setError(
+          t.review_items[0] ||
+          "Voice transcript needs review. Confirm names, numbers, locations, and negations."
+        );
+      }
       if (activeSide === "patient") {
-        await sendAndFollowUp(t, patientLang, providerLang, "patient");
+        await sendAndFollowUp(t.text, patientLang, providerLang, "patient", {
+          inputMode: "voice",
+          speechConfidence: t.confidence,
+          speechReviewItems: t.review_items,
+        });
       } else {
-        await send(t, providerLang, patientLang, "provider");
+        await send(t.text, providerLang, patientLang, "provider", {
+          inputMode: "voice",
+          speechConfidence: t.confidence,
+          speechReviewItems: t.review_items,
+        });
       }
       rec.setRecordingState("idle");
     } catch (e) { rec.setRecordingState("idle"); setError(e instanceof Error ? e.message : "Error"); }
@@ -283,27 +356,33 @@ export default function Home() {
     const v = text.trim(); if (!v) return; setText("");
     rec.setRecordingState("processing");
     if (activeSide === "patient") {
-      await sendAndFollowUp(v, patientLang, providerLang, "patient");
+      await sendAndFollowUp(v, patientLang, providerLang, "patient", { inputMode: "text" });
     } else {
-      await send(v, providerLang, patientLang, "provider");
+      await send(v, providerLang, patientLang, "provider", { inputMode: "text" });
     }
     rec.setRecordingState("idle");
   }, [text, activeSide, patientLang, providerLang, send, sendAndFollowUp, rec]);
 
   const phrase = useCallback(async (t: string) => {
     setSheet(null); rec.setRecordingState("processing");
-    const r = await send(t, "en", providerLang, "patient");
-    if (r && autoInterview && isOnline && !assessment) {
+    const r = await send(t, "en", providerLang, "patient", { inputMode: "phrase" });
+    if (r && autoInterview && isOnline && !assessment && !r.requires_human_review) {
       try {
         const followUp = await askFollowUp(interviewHistoryRef.current);
         await handleFollowUp(followUp, patientLang);
       } catch {}
+    } else if (r?.requires_human_review) {
+      setError("Confirm this translated phrase before the interview continues.");
     }
     rec.setRecordingState("idle");
   }, [providerLang, patientLang, send, autoInterview, isOnline, assessment, askFollowUp, handleFollowUp, rec]);
 
   const play = useCallback(async (m: Message) => {
     if (playingId === m.id) { tts.stop(); setPlayingId(null); return; }
+    if (m.requiresHumanReview) {
+      setError("Review this translation before playing the voice output.");
+      return;
+    }
     setPlayingId(m.id);
     try {
       if (m.audioUrl) await tts.playUrl(m.audioUrl);
@@ -357,13 +436,15 @@ export default function Home() {
     // Add to interview history
     interviewHistoryRef.current = [...interviewHistoryRef.current, { role: "patient", text: patientAnswer }];
     // Translate to provider language and show in messages
+    let requiresReview = false;
     try {
       const r: TranslateResponse = await tr.translate(
         patientAnswer,
         "en",
         providerLang,
-        { mode: "fast", includeVerification: false }
+        { mode: "precision", includeVerification: true }
       );
+      requiresReview = Boolean(r.requires_human_review);
       const m: Message = {
         id: Date.now().toString(), role: "patient", originalText: patientAnswer,
         translatedText: r.translated_text,
@@ -374,6 +455,11 @@ export default function Home() {
         timestamp: Date.now(),
         isEmergency: r.is_emergency,
         translationSource: r.translation_source,
+        criticalDetails: r.critical_details,
+        verificationItems: r.verification_items,
+        possibleMismatches: r.possible_mismatches,
+        requiresHumanReview: r.requires_human_review,
+        inputMode: "phrase",
       };
       setMessages(p => [...p, m]);
     } catch {
@@ -386,11 +472,13 @@ export default function Home() {
       setMessages(p => [...p, m]);
     }
     // Get next AI question
-    if (isOnline) {
+    if (isOnline && !requiresReview) {
       try {
         const followUp = await askFollowUp(interviewHistoryRef.current);
         await handleFollowUp(followUp, patientLang);
       } catch {}
+    } else if (requiresReview) {
+      setError("Confirm this translated answer before the interview continues.");
     }
     rec.setRecordingState("idle");
   }, [busy, assessment, rec, tr, providerLang, patientLang, isOnline, askFollowUp, handleFollowUp]);
@@ -627,21 +715,24 @@ export default function Home() {
               <div className="mt-6 w-full grid gap-2">
                 <FeatureCard
                   title="Translation Review"
-                  description="See confidence, back-translation, and important medical terms on each message."
+                  description="See confidence, verify-before-acting notes, and important medical details on each message."
                 />
                 <FeatureCard
                   title="Clinical Gap Tracking"
-                  description="Auto-interview surfaces missing history, red flags, and the next best question."
+                  description="Auto-interview pauses when voice or translation safety needs human confirmation."
                 />
                 <FeatureCard
                   title="Structured Summary"
-                  description="Generate a draft note with a verification checklist before charting."
+                  description="Generate a draft note that separates chartable facts from items that still need verification."
                 />
                 <FeatureCard
                   title="Offline Safe"
                   description="The app shell, active encounter, and saved translations stay on this device for emergency use."
                 />
               </div>
+              <p className="mt-4 text-center text-[11px] leading-relaxed text-slate-400">
+                Voice playback uses synthetic speech, not a human interpreter. Confirm critical details before acting.
+              </p>
             </div>
           )}
 
@@ -660,6 +751,12 @@ export default function Home() {
                   </p>
                 </div>
               </div>
+            </div>
+          )}
+
+          {messages.length > 0 && (
+            <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              Audio playback uses synthetic speech, not a human interpreter. Review flagged details before acting.
             </div>
           )}
 
@@ -692,14 +789,26 @@ export default function Home() {
                     </div>
                   )}
 
+                  {m.requiresHumanReview && (
+                    <div className="mx-3 sm:mx-4 mt-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                      Human review required before using this translation for clinical decisions or voice playback.
+                    </div>
+                  )}
+
+                  {m.speechConfidence && m.speechConfidence !== "high" && (
+                    <div className="mx-3 sm:mx-4 mt-2 rounded-2xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800">
+                      Voice transcript needs review before relying on details from this recording.
+                    </div>
+                  )}
+
                   <div className="mx-3 h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent" />
                   <div className="px-3 sm:px-4 pt-2 pb-3 bg-gradient-to-b from-primary-50/30 to-transparent">
                     <div className="flex items-center gap-1.5 mb-1">
                       <span className="text-xs">{tL?.flag}</span>
                       <span className="text-[10px] sm:text-[11px] font-bold text-primary-500 uppercase tracking-wider truncate">{tL?.label}</span>
-                      <button onClick={() => play(m)}
+                      <button onClick={() => play(m)} disabled={m.requiresHumanReview}
                         className={`ml-auto flex items-center gap-1 pl-2 pr-2.5 py-1 rounded-full min-h-[28px] sm:min-h-[30px] transition-all active:scale-95 shrink-0 ${
-                          playing ? "bg-primary-600 text-white shadow-md shadow-primary-500/20" : "bg-primary-50 text-primary-600 active:bg-primary-100"}`}>
+                          playing ? "bg-primary-600 text-white shadow-md shadow-primary-500/20" : "bg-primary-50 text-primary-600 active:bg-primary-100 disabled:opacity-40 disabled:cursor-not-allowed"}`}>
                         {playing ? (
                           <div className="flex items-center gap-[3px] h-3.5">
                             {[0,1,2,3].map(i => <div key={i} className="w-[3px] bg-white rounded-full animate-sound-wave" style={{ animationDelay: `${i*0.1}s`, height: "4px" }} />)}
@@ -718,11 +827,24 @@ export default function Home() {
                           {getConfidenceLabel(m.confidence)}
                         </span>
                       )}
+                      {m.speechConfidence && (
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${getConfidenceClasses(m.speechConfidence)}`}>
+                          {getSpeechConfidenceLabel(m.speechConfidence)}
+                        </span>
+                      )}
                       {m.translationSource && m.translationSource !== "cloud" && (
                         <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${getTranslationSourceClasses(m.translationSource)}`}>
                           {getTranslationSourceLabel(m.translationSource)}
                         </span>
                       )}
+                      {(m.criticalDetails ?? []).slice(0, 3).map((detail) => (
+                        <span
+                          key={`${m.id}-detail-${detail}`}
+                          className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800"
+                        >
+                          {detail}
+                        </span>
+                      ))}
                       {(m.medicalTerms ?? []).slice(0, 4).map((term) => (
                         <span
                           key={`${m.id}-${term}`}
@@ -741,6 +863,29 @@ export default function Home() {
                         <p className="mt-1 text-xs leading-relaxed text-amber-900">
                           {m.backTranslation}
                         </p>
+                      </div>
+                    )}
+
+                    {((m.verificationItems ?? []).length > 0 || (m.possibleMismatches ?? []).length > 0 || (m.speechReviewItems ?? []).length > 0) && (
+                      <div className="mt-2 rounded-2xl border border-orange-200 bg-orange-50 px-3 py-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-orange-700">
+                          Verify Before Acting
+                        </p>
+                        {(m.verificationItems ?? []).slice(0, 4).map((item) => (
+                          <p key={`${m.id}-verify-${item}`} className="mt-1 text-xs leading-relaxed text-orange-900">
+                            {item}
+                          </p>
+                        ))}
+                        {(m.speechReviewItems ?? []).slice(0, 2).map((item) => (
+                          <p key={`${m.id}-speech-${item}`} className="mt-1 text-xs leading-relaxed text-orange-900">
+                            {item}
+                          </p>
+                        ))}
+                        {(m.possibleMismatches ?? []).slice(0, 2).map((item) => (
+                          <p key={`${m.id}-mismatch-${item}`} className="mt-1 text-xs leading-relaxed text-red-700">
+                            Possible mismatch: {item}
+                          </p>
+                        ))}
                       </div>
                     )}
                   </div>

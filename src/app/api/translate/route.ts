@@ -4,6 +4,11 @@ import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
 import { detectPromptInjection, sanitizeUserInput, validateTranslationOutput, detectEmergency } from "@/lib/security";
 import { parseJsonObject } from "@/lib/json";
 import { ConfidenceLevel } from "@/types";
+import {
+  buildMedicalVerificationNotes,
+  extractCriticalDetails,
+  shouldEscalateMedicalVerification,
+} from "@/lib/medicalSafety";
 
 const MAX_TEXT_LENGTH = 2000;
 
@@ -187,6 +192,14 @@ interface TranslationModelOutput {
   medical_terms?: unknown;
 }
 
+interface TranslationReviewOutput {
+  confidence?: unknown;
+  requires_human_review?: unknown;
+  verification_items?: unknown;
+  possible_mismatches?: unknown;
+  critical_details?: unknown;
+}
+
 function normalizeConfidence(value: unknown): ConfidenceLevel {
   return value === "high" || value === "medium" || value === "low"
     ? value
@@ -205,6 +218,83 @@ function normalizeMedicalTerms(value: unknown): string[] {
         .slice(0, 8)
     )
   );
+}
+
+function normalizeStringArray(value: unknown, limit = 8): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .slice(0, limit)
+    )
+  );
+}
+
+function normalizeBoolean(value: unknown): boolean {
+  return value === true || value === "true";
+}
+
+async function reviewTranslation({
+  sourceText,
+  translatedText,
+  backTranslation,
+  sourceName,
+  targetName,
+}: {
+  sourceText: string;
+  translatedText: string;
+  backTranslation: string;
+  sourceName: string;
+  targetName: string;
+}) {
+  const openai = getOpenAI();
+  const reviewPrompt = `You are auditing a bilingual medical translation for patient safety.
+
+Do not rewrite the translation. Compare the source text, translated text, and back-translation.
+Return JSON only with this exact shape:
+{
+  "confidence": "high" | "medium" | "low",
+  "requires_human_review": true | false,
+  "verification_items": ["up to 6 plain-English items"],
+  "possible_mismatches": ["up to 4 plain-English concerns"],
+  "critical_details": ["up to 8 short English details that must stay exact"]
+}
+
+Review rules:
+- Focus on medications, allergies, dosages, numbers, units, body location, laterality, timing, pregnancy status, negations, and symptom severity.
+- Mark confidence "low" if any of those details may be unsafe or materially ambiguous.
+- Set requires_human_review to true when a clinician should confirm details before acting.
+- verification_items must be short action-oriented English prompts such as "Confirm whether the patient denies penicillin allergy."
+- possible_mismatches should only list suspected issues, not generic caveats.
+- critical_details should be short English phrases the clinician can scan quickly.
+- Never add markdown or extra keys.`;
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",
+    temperature: 0,
+    max_tokens: 700,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: reviewPrompt },
+      {
+        role: "user",
+        content: [
+          `SOURCE LANGUAGE: ${sourceName}`,
+          `TARGET LANGUAGE: ${targetName}`,
+          `SOURCE TEXT:\n${sourceText}`,
+          `TRANSLATED TEXT:\n${translatedText}`,
+          `BACK-TRANSLATION:\n${backTranslation || "(missing)"}`,
+        ].join("\n\n"),
+      },
+    ],
+  });
+
+  const rawOutput = response.choices[0]?.message?.content?.trim() || "";
+  return parseJsonObject<TranslationReviewOutput>(rawOutput);
 }
 
 export async function POST(request: NextRequest) {
@@ -226,10 +316,13 @@ export async function POST(request: NextRequest) {
       include_verification,
     } = await request.json();
     const translationMode = mode === "fast" ? "fast" : "precision";
+    const mustEscalateVerification =
+      typeof text === "string" &&
+      (shouldEscalateMedicalVerification(text) || detectEmergency(text));
     const includeVerification =
       typeof include_verification === "boolean"
-        ? include_verification
-        : translationMode !== "fast";
+        ? include_verification || mustEscalateVerification
+        : translationMode !== "fast" || mustEscalateVerification;
 
     if (!text || !target_lang) {
       return NextResponse.json({ error: "Missing required fields: text, target_lang" }, { status: 400 });
@@ -280,8 +373,49 @@ export async function POST(request: NextRequest) {
     const backTranslation = validateTranslationOutput(
       typeof parsed.back_translation === "string" ? parsed.back_translation : ""
     );
-    const confidence = normalizeConfidence(parsed.confidence);
+    let confidence = normalizeConfidence(parsed.confidence);
     const medicalTerms = normalizeMedicalTerms(parsed.medical_terms);
+    const fallbackCriticalDetails = extractCriticalDetails(cleanText);
+    const fallbackVerificationItems = buildMedicalVerificationNotes(cleanText, confidence);
+    let criticalDetails = includeVerification ? fallbackCriticalDetails : [];
+    let verificationItems = includeVerification ? fallbackVerificationItems : [];
+    let possibleMismatches: string[] = [];
+    let requiresHumanReview = false;
+
+    if (includeVerification) {
+      try {
+        const reviewed = await reviewTranslation({
+          sourceText: cleanText,
+          translatedText,
+          backTranslation,
+          sourceName: sourceName || "detected language",
+          targetName,
+        });
+
+        confidence =
+          reviewed.confidence === "high" || reviewed.confidence === "medium" || reviewed.confidence === "low"
+            ? reviewed.confidence
+            : confidence;
+        requiresHumanReview = normalizeBoolean(reviewed.requires_human_review);
+        verificationItems = Array.from(
+          new Set([
+            ...normalizeStringArray(reviewed.verification_items, 6),
+            ...fallbackVerificationItems,
+          ])
+        ).slice(0, 6);
+        possibleMismatches = normalizeStringArray(reviewed.possible_mismatches, 4);
+        criticalDetails = Array.from(
+          new Set([
+            ...normalizeStringArray(reviewed.critical_details, 8),
+            ...fallbackCriticalDetails,
+          ])
+        ).slice(0, 8);
+      } catch {
+        requiresHumanReview = confidence !== "high" && mustEscalateVerification;
+        verificationItems = fallbackVerificationItems;
+        criticalDetails = fallbackCriticalDetails;
+      }
+    }
 
     if (!translatedText) {
       return NextResponse.json({ error: "Translation produced empty result" }, { status: 500 });
@@ -292,7 +426,17 @@ export async function POST(request: NextRequest) {
       back_translation: includeVerification ? backTranslation || undefined : undefined,
       confidence,
       medical_terms: includeVerification ? medicalTerms : [],
-      is_emergency: isEmergency,
+      critical_details: includeVerification ? criticalDetails : [],
+      verification_items: includeVerification ? verificationItems : [],
+      possible_mismatches: includeVerification ? possibleMismatches : [],
+      requires_human_review:
+        includeVerification
+          ? requiresHumanReview || confidence === "low"
+          : false,
+      is_emergency:
+        isEmergency ||
+        detectEmergency(translatedText) ||
+        detectEmergency(backTranslation),
       model,
       translation_source: "cloud",
     });

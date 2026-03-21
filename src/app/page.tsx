@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import ClinicalSummary from "@/components/ClinicalSummary";
-import EncounterInsights from "@/components/EncounterInsights";
 import {
   AnswerOption,
   AssessmentData,
@@ -14,7 +12,7 @@ import {
 } from "@/types";
 import { loadEncounterState, saveEncounterState } from "@/lib/encounterStorage";
 import { getLanguageByCode, languages } from "@/lib/languages";
-import { hasOfflinePackForPair } from "@/lib/offlineTranslation";
+import { hasOfflinePackForPair, getPhraseTextById } from "@/lib/offlineTranslation";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useSpeechToText } from "@/hooks/useSpeechToText";
@@ -56,24 +54,24 @@ function FeatureCard({ title, description }: { title: string; description: strin
   );
 }
 
-/* ─── Quick Phrases ─── */
+/* ─── Quick Phrases (mapped to offline phrasebook IDs for multilingual display) ─── */
 const PHRASES = [
-  { emoji: "\u{1F44B}", text: "Hello, I need help", cat: "general" },
-  { emoji: "\u{1F915}", text: "I am in pain", cat: "pain" },
-  { emoji: "\u{1F48A}", text: "I need my medication", cat: "meds" },
-  { emoji: "\u{1F691}", text: "This is an emergency", cat: "emergency" },
-  { emoji: "\u{1F922}", text: "I feel nauseous", cat: "symptoms" },
-  { emoji: "\u{1F6BB}", text: "Where is the bathroom?", cat: "general" },
-  { emoji: "\u{1F4A7}", text: "I need water", cat: "general" },
-  { emoji: "\u26A0\uFE0F", text: "I am allergic", cat: "meds" },
-  { emoji: "\u{1F912}", text: "I have a fever", cat: "symptoms" },
-  { emoji: "\u{1F635}\u200D\u{1F4AB}", text: "I feel dizzy", cat: "symptoms" },
-  { emoji: "\u{1F489}", text: "I am diabetic", cat: "meds" },
-  { emoji: "\u{1F4DE}", text: "Call my family please", cat: "general" },
-  { emoji: "\u{1F494}", text: "I have chest pain", cat: "emergency" },
-  { emoji: "\u{1F6A8}", text: "I can't breathe", cat: "emergency" },
-  { emoji: "\u{1F9B4}", text: "The pain is here", cat: "pain" },
-  { emoji: "\u{1F4A5}", text: "The pain is severe", cat: "pain" },
+  { emoji: "\u{1F44B}", en: "Hello, I need help", phraseId: "hello_help", cat: "general" },
+  { emoji: "\u{1F915}", en: "I am in pain", phraseId: "pain", cat: "pain" },
+  { emoji: "\u{1F48A}", en: "I need my medication", phraseId: "medication", cat: "meds" },
+  { emoji: "\u{1F691}", en: "This is an emergency", phraseId: "emergency", cat: "emergency" },
+  { emoji: "\u{1F922}", en: "I feel nauseous", phraseId: "nauseous", cat: "symptoms" },
+  { emoji: "\u{1F6BB}", en: "Where is the bathroom?", phraseId: "bathroom", cat: "general" },
+  { emoji: "\u{1F4A7}", en: "I need water", phraseId: "water", cat: "general" },
+  { emoji: "\u26A0\uFE0F", en: "I am allergic", phraseId: "allergic", cat: "meds" },
+  { emoji: "\u{1F912}", en: "I have a fever", phraseId: "fever", cat: "symptoms" },
+  { emoji: "\u{1F635}\u200D\u{1F4AB}", en: "I feel dizzy", phraseId: "dizzy", cat: "symptoms" },
+  { emoji: "\u{1F489}", en: "I am diabetic", phraseId: "diabetic", cat: "meds" },
+  { emoji: "\u{1F4DE}", en: "Call my family please", phraseId: "call_family", cat: "general" },
+  { emoji: "\u{1F494}", en: "I have chest pain", phraseId: "chest_pain", cat: "emergency" },
+  { emoji: "\u{1F6A8}", en: "I can't breathe", phraseId: "cant_breathe", cat: "emergency" },
+  { emoji: "\u{1F9B4}", en: "The pain is here", phraseId: "pain_here", cat: "pain" },
+  { emoji: "\u{1F4A5}", en: "The pain is severe", phraseId: "pain_severe", cat: "pain" },
 ];
 
 export default function Home() {
@@ -91,7 +89,6 @@ export default function Home() {
   const [interviewLoading, setInterviewLoading] = useState(false);
   const [activeSide, setActiveSide] = useState<"patient" | "provider">("patient");
   const [reasoning, setReasoning] = useState<ClinicalReasoningData | null>(null);
-  const [showReasoning, setShowReasoning] = useState(false);
   const [nonVerbal, setNonVerbal] = useState(false);
   const [answerOptions, setAnswerOptions] = useState<AnswerOption[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState<string | null>(null);
@@ -115,7 +112,6 @@ export default function Home() {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages.length]);
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(null), 4000); return () => clearTimeout(t); }, [error]);
-  useEffect(() => { if (reasoning || assessment) setShowReasoning(true); }, [reasoning, assessment]);
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 
@@ -229,15 +225,12 @@ export default function Home() {
       followUp.question,
       "en",
       targetPatientLang,
-      { mode: "precision", includeVerification: true }
+      { mode: "fast", includeVerification: false }
     );
     const msgId = (Date.now() + 1).toString();
     const providerMsg: Message = {
       id: msgId, role: "provider", originalText: followUp.question,
       translatedText: trResult.translated_text,
-      backTranslation: trResult.back_translation,
-      confidence: trResult.confidence,
-      medicalTerms: trResult.medical_terms,
       sourceLang: "en",
       targetLang: targetPatientLang,
       timestamp: Date.now(),
@@ -245,24 +238,22 @@ export default function Home() {
       translationSource: trResult.translation_source,
     };
     setMessages(p => [...p, providerMsg]);
-    // Auto-play AI question to patient
-    try {
-      const audioUrl = await tts.speak(trResult.translated_text, targetPatientLang);
-      if (audioUrl) {
-        setMessages(p => p.map(x => x.id === msgId ? { ...x, audioUrl } : x));
-      }
-    } catch { /* TTS failed, not critical */ }
+    // Fire-and-forget TTS — don't block the UI
+    tts.speak(trResult.translated_text, targetPatientLang)
+      .then(audioUrl => { if (audioUrl) setMessages(p => p.map(x => x.id === msgId ? { ...x, audioUrl } : x)); })
+      .catch(() => {});
   }, [tr, tts]);
 
-  // After patient speaks, auto-generate next clinical question
+  // After patient speaks, auto-generate next clinical question (non-blocking)
   const sendAndFollowUp = useCallback(async (txt: string, from: string, to: string, role: "patient" | "provider") => {
     const r = await send(txt, from, to, role);
     if (!r || !autoInterview || !isOnline || role !== "patient" || assessment) return;
 
-    try {
-      const followUp = await askFollowUp(interviewHistoryRef.current);
-      await handleFollowUp(followUp, from);
-    } catch { /* follow-up failed silently, user can still interact manually */ }
+    // Fire interview in background — don't block UI
+    const history = [...interviewHistoryRef.current];
+    askFollowUp(history)
+      .then(followUp => handleFollowUp(followUp, from))
+      .catch(() => {});
   }, [send, autoInterview, isOnline, assessment, askFollowUp, handleFollowUp]);
 
   const processBlob = useCallback(async (blob: Blob) => {
@@ -333,7 +324,6 @@ export default function Home() {
     setMessages([]);
     setAssessment(null);
     setReasoning(null);
-    setShowReasoning(false);
     setAnswerOptions([]);
     setCurrentQuestion(null);
     interviewHistoryRef.current = [];
@@ -547,13 +537,20 @@ export default function Home() {
                     <p className="text-[12px] text-slate-400 mt-0.5">Tap to translate instantly</p>
                   </div>
                   <div className="overflow-y-auto thin-scroll px-4 pb-10 grid grid-cols-2 gap-2">
-                    {PHRASES.map(p => (
-                      <button key={p.text} onClick={() => phrase(p.text)} disabled={busy}
-                        className="flex items-center gap-2.5 px-3.5 py-3.5 bg-slate-50 hover:bg-primary-50 border border-slate-200/80 hover:border-primary-200 rounded-2xl text-left transition-all disabled:opacity-40 min-h-[52px] active:scale-[0.97]">
-                        <span className="text-[20px] shrink-0">{p.emoji}</span>
-                        <span className="text-[13px] font-semibold text-slate-700 leading-tight">{p.text}</span>
-                      </button>
-                    ))}
+                    {PHRASES.map(p => {
+                      const local = getPhraseTextById(p.phraseId, patientLang);
+                      const isLocalized = local && patientLang !== "en";
+                      return (
+                        <button key={p.en} onClick={() => phrase(p.en)} disabled={busy}
+                          className="flex items-center gap-2.5 px-3.5 py-3.5 bg-slate-50 hover:bg-primary-50 border border-slate-200/80 hover:border-primary-200 rounded-2xl text-left transition-all disabled:opacity-40 min-h-[52px] active:scale-[0.97]">
+                          <span className="text-[20px] shrink-0">{p.emoji}</span>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-[13px] font-semibold text-slate-700 leading-tight block truncate" dir={pL?.dir === "rtl" ? "rtl" : "ltr"}>{isLocalized ? local : p.en}</span>
+                            {isLocalized && <span className="text-[10px] text-slate-400 leading-tight block truncate">{p.en}</span>}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </>
               )}
@@ -605,14 +602,21 @@ export default function Home() {
               ) : (
                 <>
                   <div className="w-full grid grid-cols-1 gap-2">
-                    {PHRASES.slice(0, 4).map(p => (
-                      <button key={p.text} onClick={() => phrase(p.text)} disabled={busy}
-                        className="w-full flex items-center gap-2.5 px-3.5 py-3 bg-white active:bg-primary-50 border border-slate-200/80 active:border-primary-200 rounded-2xl text-left transition-all disabled:opacity-40 active:scale-[0.98] shadow-sm shadow-slate-100">
-                        <span className="text-lg shrink-0">{p.emoji}</span>
-                        <span className="text-[13px] font-semibold text-slate-700 flex-1">{p.text}</span>
-                        <svg className="w-3.5 h-3.5 text-slate-300 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
-                      </button>
-                    ))}
+                    {PHRASES.slice(0, 4).map(p => {
+                      const local = getPhraseTextById(p.phraseId, patientLang);
+                      const isLocalized = local && patientLang !== "en";
+                      return (
+                        <button key={p.en} onClick={() => phrase(p.en)} disabled={busy}
+                          className="w-full flex items-center gap-2.5 px-3.5 py-3 bg-white active:bg-primary-50 border border-slate-200/80 active:border-primary-200 rounded-2xl text-left transition-all disabled:opacity-40 active:scale-[0.98] shadow-sm shadow-slate-100">
+                          <span className="text-lg shrink-0">{p.emoji}</span>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-[13px] font-semibold text-slate-700 block truncate" dir={pL?.dir === "rtl" ? "rtl" : "ltr"}>{isLocalized ? local : p.en}</span>
+                            {isLocalized && <span className="text-[10px] text-slate-400 block truncate">{p.en}</span>}
+                          </div>
+                          <svg className="w-3.5 h-3.5 text-slate-300 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                        </button>
+                      );
+                    })}
                   </div>
                   <button onClick={() => setSheet("phrases")} className="mt-4 text-[13px] font-semibold text-primary-500 active:text-primary-700 py-1.5">
                     See all phrases
@@ -745,31 +749,27 @@ export default function Home() {
             })}
           </div>
 
-          {messages.length > 0 && (
-            <div className="mt-4 space-y-3">
-              <button
-                onClick={() => setShowReasoning(v => !v)}
-                className="w-full flex items-center gap-2 px-3 py-3 rounded-2xl bg-indigo-50 border border-indigo-200/70 active:bg-indigo-100 transition-all"
-              >
-                <svg className={`w-3.5 h-3.5 text-indigo-500 transition-transform ${showReasoning ? "rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
-                <div className="text-left">
-                  <p className="text-[11px] font-bold text-indigo-600 uppercase tracking-[0.18em]">Clinical Workspace</p>
-                  <p className="text-xs text-indigo-500">Provider-only review panel for gaps, differentials, and chart draft</p>
+          {/* Assessment complete banner — provider only */}
+          {assessment && activeSide === "provider" && (
+            <div className="mt-4 msg-enter rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <p className="text-[11px] font-bold text-emerald-700 uppercase tracking-[0.18em] mb-1">Interview Complete</p>
+              <p className="text-sm text-emerald-900 font-semibold">ESI Level {assessment.esiLevel}</p>
+              <p className="text-xs text-emerald-700 mt-1 leading-relaxed">{assessment.rationale}</p>
+              {assessment.criticalActions.length > 0 && (
+                <div className="mt-2">
+                  <p className="text-[10px] font-bold text-red-600 uppercase tracking-wider">Critical Actions</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {assessment.criticalActions.map((a, i) => (
+                      <li key={i} className="text-xs text-red-800">{a}</li>
+                    ))}
+                  </ul>
                 </div>
-                <span className="text-[10px] text-indigo-500 ml-auto bg-white px-2.5 py-1 rounded-full font-bold">
-                  {assessment ? "Assessment ready" : reasoning ? "Live" : "Open"}
-                </span>
-              </button>
-
-              {showReasoning && (
-                <>
-                  <EncounterInsights
-                    messages={messages}
-                    reasoning={reasoning}
-                    assessment={assessment}
-                  />
-                  <ClinicalSummary messages={messages} />
-                </>
+              )}
+              {assessment.recommendedWorkup.length > 0 && (
+                <div className="mt-2">
+                  <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Workup</p>
+                  <p className="text-xs text-emerald-800 mt-0.5">{assessment.recommendedWorkup.join(" | ")}</p>
+                </div>
               )}
             </div>
           )}

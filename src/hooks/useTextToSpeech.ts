@@ -22,9 +22,23 @@ const SPEECH_LANG_MAP: Record<string, string> = {
   "zh-TW": "zh-TW",
 };
 
+// Languages where OpenAI TTS-1-HD sounds better than browser voices
+const PREFER_OPENAI: Set<string> = new Set(["en"]);
+
 function getSpeechLangTag(lang?: string): string {
   if (!lang) return "en-US";
   return SPEECH_LANG_MAP[lang] || SPEECH_LANG_MAP[lang.split("-")[0]] || lang;
+}
+
+function hasBrowserVoice(lang?: string): boolean {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
+  const langTag = getSpeechLangTag(lang);
+  const voices = window.speechSynthesis.getVoices();
+  return voices.some(
+    (v) =>
+      v.lang.toLowerCase() === langTag.toLowerCase() ||
+      v.lang.toLowerCase().startsWith(langTag.slice(0, 2).toLowerCase())
+  );
 }
 
 export function useTextToSpeech() {
@@ -59,14 +73,28 @@ export function useTextToSpeech() {
         const synth = window.speechSynthesis;
         const langTag = getSpeechLangTag(lang);
         utterance.lang = langTag;
+        utterance.rate = 0.95; // Slightly slower for medical clarity
 
         const voices = synth.getVoices();
-        const matchingVoice =
-          voices.find((voice) => voice.lang.toLowerCase() === langTag.toLowerCase()) ||
-          voices.find((voice) => voice.lang.toLowerCase().startsWith(langTag.slice(0, 2).toLowerCase()));
+        // Prefer higher-quality voices (often labeled "Enhanced", "Premium", or not "compact")
+        const exactMatches = voices.filter(
+          (v) => v.lang.toLowerCase() === langTag.toLowerCase()
+        );
+        const prefixMatches = voices.filter(
+          (v) => v.lang.toLowerCase().startsWith(langTag.slice(0, 2).toLowerCase())
+        );
+        const candidates = exactMatches.length > 0 ? exactMatches : prefixMatches;
 
-        if (matchingVoice) {
-          utterance.voice = matchingVoice;
+        // Pick the best quality voice available
+        const bestVoice =
+          candidates.find((v) => v.name.toLowerCase().includes("premium")) ||
+          candidates.find((v) => v.name.toLowerCase().includes("enhanced")) ||
+          candidates.find((v) => v.name.toLowerCase().includes("neural")) ||
+          candidates.find((v) => !v.name.toLowerCase().includes("compact")) ||
+          candidates[0];
+
+        if (bestVoice) {
+          utterance.voice = bestVoice;
         }
 
         utteranceRef.current = utterance;
@@ -91,66 +119,89 @@ export function useTextToSpeech() {
     [stop]
   );
 
+  const speakWithOpenAI = useCallback(
+    async (text: string, lang?: string): Promise<string> => {
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, lang }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Text-to-speech failed");
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+
+      setIsLoading(false);
+      setIsPlaying(true);
+
+      audio.onended = () => {
+        setIsPlaying(false);
+        audioRef.current = null;
+      };
+      audio.onerror = () => {
+        setIsPlaying(false);
+        setError("Could not play audio");
+        audioRef.current = null;
+      };
+
+      await audio.play();
+      return audioUrl;
+    },
+    []
+  );
+
   const speak = useCallback(
     async (text: string, lang?: string): Promise<string> => {
       setError(null);
       stop();
       setIsLoading(true);
 
+      const baseLang = lang?.split("-")[0] || "en";
+      const offline = typeof navigator !== "undefined" && !navigator.onLine;
+      const browserHasVoice = hasBrowserVoice(lang);
+      const useOpenAIPrimary = !offline && PREFER_OPENAI.has(baseLang);
+
       try {
-        if (typeof navigator !== "undefined" && !navigator.onLine) {
+        // Strategy: use browser native for non-English (better accents, instant),
+        // OpenAI HD for English (more natural). Fallback to the other if primary fails.
+        if (useOpenAIPrimary) {
+          return await speakWithOpenAI(text, lang);
+        }
+        if (browserHasVoice) {
           return await speakWithBrowser(text, lang);
         }
-
-        const response = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, lang }),
-        });
-
-        if (!response.ok) {
-          throw new Error("Text-to-speech failed");
+        if (!offline) {
+          return await speakWithOpenAI(text, lang);
         }
-
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-
-        const audio = new Audio(audioUrl);
-        audioRef.current = audio;
-
-        setIsLoading(false);
-        setIsPlaying(true);
-
-        audio.onended = () => {
-          setIsPlaying(false);
-          audioRef.current = null;
-        };
-        audio.onerror = () => {
-          setIsPlaying(false);
-          setError("Could not play audio");
-          audioRef.current = null;
-        };
-
-        await audio.play();
-        return audioUrl;
-      } catch (err) {
-        if (typeof window !== "undefined" && "speechSynthesis" in window) {
-          try {
+        throw new Error("No voice available for this language offline");
+      } catch (primaryErr) {
+        // Fallback
+        try {
+          if (useOpenAIPrimary && browserHasVoice) {
             return await speakWithBrowser(text, lang);
-          } catch (browserErr) {
-            err = browserErr;
           }
+          if (!useOpenAIPrimary && !offline) {
+            return await speakWithOpenAI(text, lang);
+          }
+        } catch {
+          // Both failed
         }
 
         setIsLoading(false);
         setIsPlaying(false);
         const message =
-          err instanceof Error ? err.message : "Could not generate speech";
+          primaryErr instanceof Error ? primaryErr.message : "Could not generate speech";
         setError(message);
-        throw err;
+        throw primaryErr;
       }
     },
-    [speakWithBrowser, stop]
+    [speakWithBrowser, speakWithOpenAI, stop]
   );
 
   const playUrl = useCallback(

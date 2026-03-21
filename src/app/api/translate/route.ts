@@ -252,8 +252,8 @@ export async function POST(request: NextRequest) {
     const isEmergency = detectEmergency(cleanText);
     const openai = getOpenAI();
     const systemPrompt = buildSystemPrompt(source_lang, target_lang, includeVerification);
-    const model = "gpt-4o";
-    const maxTokens = includeVerification ? 1200 : 600;
+    const model = includeVerification ? "gpt-4o" : "gpt-4o-mini";
+    const maxTokens = includeVerification ? 1200 : 400;
 
     const sourceName = source_lang ? resolveName(source_lang) : null;
     const targetName = resolveName(target_lang);

@@ -390,9 +390,9 @@ export async function POST(request: NextRequest) {
 
     const openai = getOpenAI();
     const result = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini",
       temperature: 0.05,
-      max_tokens: 1200,
+      max_tokens: 800,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: INTERVIEW_PROMPT },

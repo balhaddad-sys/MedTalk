@@ -88,11 +88,11 @@ export async function POST(request: NextRequest) {
 
     const openai = getOpenAI();
     const response = await openai.audio.speech.create({
-      model: "tts-1",
+      model: "tts-1-hd",
       voice: selectedVoice,
       input: text,
       response_format: "mp3",
-      speed: 0.95,
+      speed: 1.0,
     });
 
     const audioBuffer = Buffer.from(await response.arrayBuffer());

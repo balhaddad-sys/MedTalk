@@ -4,7 +4,6 @@ import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
 import {
   buildTtsInstructions,
   normalizeTextForSpeech,
-  shouldEscalateMedicalVerification,
 } from "@/lib/medicalSafety";
 
 const MAX_TEXT_LENGTH = 4096;
@@ -101,16 +100,15 @@ export async function POST(request: NextRequest) {
 
     const selectedVoice = pickVoice(lang, voice);
     const normalizedText = normalizeTextForSpeech(text);
-    const highRisk = shouldEscalateMedicalVerification(text);
 
     const openai = getOpenAI();
     const response = await openai.audio.speech.create({
       model: "gpt-4o-mini-tts",
       voice: selectedVoice,
       input: normalizedText,
-      instructions: buildTtsInstructions(text),
+      instructions: buildTtsInstructions(text, lang),
       response_format: "mp3",
-      speed: highRisk ? 0.9 : 0.97,
+      speed: 1.0,
     });
 
     const audioBuffer = Buffer.from(await response.arrayBuffer());

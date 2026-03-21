@@ -3,7 +3,6 @@
 import { useState, useRef, useCallback } from "react";
 import {
   normalizeTextForSpeech,
-  shouldEscalateMedicalVerification,
 } from "@/lib/medicalSafety";
 
 const SPEECH_LANG_MAP: Record<string, string> = {
@@ -26,8 +25,9 @@ const SPEECH_LANG_MAP: Record<string, string> = {
   "zh-TW": "zh-TW",
 };
 
-// Languages where OpenAI TTS sounds better than browser voices
-const PREFER_OPENAI: Set<string> = new Set(["en"]);
+// Always prefer OpenAI TTS — gpt-4o-mini-tts handles all languages well
+// Browser TTS is only a fallback when offline
+const PREFER_OPENAI: Set<string> = new Set(Object.keys(SPEECH_LANG_MAP));
 
 function getSpeechLangTag(lang?: string): string {
   if (!lang) return "en-US";
@@ -78,7 +78,7 @@ export function useTextToSpeech() {
         const synth = window.speechSynthesis;
         const langTag = getSpeechLangTag(lang);
         utterance.lang = langTag;
-        utterance.rate = shouldEscalateMedicalVerification(text) ? 0.88 : 0.93;
+        utterance.rate = 0.92;
 
         const voices = synth.getVoices();
         // Prefer higher-quality voices (often labeled "Enhanced", "Premium", or not "compact")

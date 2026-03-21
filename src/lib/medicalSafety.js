@@ -114,25 +114,39 @@ export function normalizeTextForSpeech(text) {
   return normalized;
 }
 
-export function buildTtsInstructions(text) {
+const LANG_NAMES = {
+  ar: "Arabic", ur: "Urdu", fa: "Farsi", he: "Hebrew", ku: "Kurdish",
+  hi: "Hindi", bn: "Bengali", ta: "Tamil", te: "Telugu", ml: "Malayalam",
+  ne: "Nepali", si: "Sinhala", en: "English", es: "Spanish", fr: "French",
+  de: "German", it: "Italian", pt: "Portuguese", ru: "Russian", uk: "Ukrainian",
+  pl: "Polish", tr: "Turkish", zh: "Mandarin Chinese", ja: "Japanese",
+  ko: "Korean", vi: "Vietnamese", th: "Thai", tl: "Filipino", so: "Somali",
+  sw: "Swahili", am: "Amharic", my: "Burmese", ht: "Haitian Creole",
+};
+
+export function buildTtsInstructions(text, lang) {
+  const baseLang = lang?.split("-")[0] || "en";
+  const langName = LANG_NAMES[baseLang] || "the target language";
   const highRisk = shouldEscalateMedicalVerification(text);
 
+  const base = [
+    `You are a professional medical interpreter speaking ${langName}.`,
+    `Speak in ${langName} with a native accent and natural rhythm.`,
+    "Sound like a warm, reassuring human — not robotic or stilted.",
+    "Use natural intonation and phrasing as a native speaker would.",
+    "Read exactly what is written. Do not add, remove, or rephrase any words.",
+  ];
+
   if (highRisk) {
-    return [
-      "Read this as a hospital safety message.",
-      "Speak slowly, clearly, and calmly.",
-      "Pause briefly around medication names, numbers, units, dates, and times.",
-      "Do not improvise or summarize.",
-      "Sound careful rather than authoritative.",
-    ].join(" ");
+    base.push(
+      "This contains critical medical information.",
+      "Speak at a calm, measured pace.",
+      "Pause briefly before and after medication names, numbers, and units.",
+      "Enunciate drug names and dosages very clearly."
+    );
   }
 
-  return [
-    "Read this as a medical interpreter playback.",
-    "Speak clearly and naturally.",
-    "Keep a steady pace with clean pronunciation.",
-    "Do not add extra words.",
-  ].join(" ");
+  return base.join(" ");
 }
 
 export function summarizeTranscriptionLogprobs(logprobs = []) {
